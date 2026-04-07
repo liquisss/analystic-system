@@ -1,3 +1,11 @@
 # Default ignored files
 /shelf/
 /workspace.xml
+backend/venv/
+venv/
+ENV/
+env/
+*.dll
+*.so
+*.dylib
+*.lib
