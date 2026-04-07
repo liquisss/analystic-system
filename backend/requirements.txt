@@ -1,0 +1,13 @@
+PyQt6
+PyQt6-WebEngine
+natasha
+bertopic
+sentence-transformers
+umap-learn
+hdbscan
+PyPDF2
+python-docx
+pandas
+chardet
+jinja2
+weasyprint
