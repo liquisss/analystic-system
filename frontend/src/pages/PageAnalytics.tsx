@@ -3,6 +3,8 @@ import { VOSviewerOnline } from 'vosviewer-online'
 import Icon from '../components/Icon'
 import type { BertopicResult, TopicResult, DocTopic } from '../App'
 import { generatePdfReport, saveFileDialog, onResult } from '../bridge'
+import { TopicDetailModal } from './TopicDetailModal'
+import type { ProcessedDocument } from './TopicDetailModal'
 
 /* ── Цвета для тем ── */
 const TOPIC_COLORS = [
@@ -211,13 +213,15 @@ const ReportModal = ({ onClose, btResult }: { onClose: () => void; btResult: Ber
 
 /* ── PageAnalytics ── */
 interface PageAnalyticsProps {
-  btResult: BertopicResult | null
+  btResult:    BertopicResult | null
+  natashaDocs: ProcessedDocument[]   // documents из processed.json / natasha_data
 }
 
-const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
+const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
   const [tab, setTab]                     = useState<'analytics' | 'vos'>('analytics')
   const [selectedTopic, setSelectedTopic] = useState<number | null>(null)
   const [showReport, setShowReport]       = useState(false)
+  const [detailTopic, setDetailTopic]     = useState<TopicResult | null>(null)
 
   const topics     = btResult?.topics      ?? []
   const totalDocs  = btResult?.total_docs  ?? 0
@@ -226,24 +230,42 @@ const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
   const noiseCount = btResult?.noise_count ?? 0
   const vosData    = btResult?.vos_data    ?? null
 
-  // ── МЕСТО 1: получаем doc_topics ──
   const docTopics: DocTopic[] = btResult?.doc_topics ?? []
 
   const barData: BarItem[] = topics.slice(0, 8).map(t => ({ l: `T${t.id}`, v: t.count }))
 
-  const clusterLinks = topics.slice(0, 5).flatMap((t, i) =>
-    topics.slice(i + 1, i + 2).map(t2 => {
-      const shared = t.words.filter(w => t2.words.includes(w)).length
-      const weight = Math.min(0.99, shared / 10 + 0.3)
-      return { a: `T${t.id}`, b: `T${t2.id}`, w: parseFloat(weight.toFixed(2)) }
-    })
-  ).slice(0, 3)
+  // ── Межкластерные связи из vos_data.network.links ──────────────────────
+  // Раньше связи вычислялись фиктивно по пересечению слов с формулой
+  // weight = shared/10 + 0.3 — это давало бессмысленные числа.
+  // Теперь берём реальные cosine similarity из vos_data, уже рассчитанные
+  // bertopic_processor.py. vos_data использует id = topic.id + 1, поэтому
+  // при поиске названия темы делаем source_id - 1.
+  const clusterLinks = (() => {
+    const links = vosData?.network?.links
+    if (!links || links.length === 0) return []
+
+    // top-6 самых сильных связей
+    return [...links]
+      .sort((a, b) => b.strength - a.strength)
+      .slice(0, 6)
+      .map(lnk => {
+        const topicA = topics.find(t => t.id + 1 === lnk.source_id)
+        const topicB = topics.find(t => t.id + 1 === lnk.target_id)
+        const idxA   = topicA ? topics.indexOf(topicA) : 0
+        return {
+          a:     topicA?.label ?? `T${lnk.source_id - 1}`,
+          b:     topicB?.label ?? `T${lnk.target_id - 1}`,
+          w:     lnk.strength,
+          color: TOPIC_COLORS[idxA % TOPIC_COLORS.length],
+        }
+      })
+  })()
 
   const dominantTopic = topics[0]
   const dominantPct   = dominantTopic && totalDocs > 0
     ? Math.round((dominantTopic.count / totalDocs) * 100) : 0
 
-  // ── МЕСТО 2: вычисляем динамику — только если есть даты ──
+  // ── Динамика — только если есть даты ──
   const dynamicsData = (() => {
     const withDates = docTopics.filter(d => d.date && d.topic >= 0)
     if (withDates.length === 0) return null
@@ -282,6 +304,14 @@ const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
   return (
     <div className="animate-fadeUp">
       {showReport && <ReportModal onClose={() => setShowReport(false)} btResult={btResult} />}
+      {detailTopic && (
+        <TopicDetailModal
+          topic={detailTopic}
+          docTopics={docTopics}
+          natashaDocs={natashaDocs}
+          onClose={() => setDetailTopic(null)}
+        />
+      )}
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
@@ -333,7 +363,8 @@ const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
                 {topics.map((t, i) => (
                   <div key={t.id}
                     className={`topic-chip${selectedTopic === t.id ? ' selected' : ''}`}
-                    onClick={() => setSelectedTopic(t.id === selectedTopic ? null : t.id)}>
+                    onClick={() => setDetailTopic(t)}
+                    style={{ cursor: 'pointer' }}>
                     <div className="topic-dot" style={{ background: TOPIC_COLORS[i % TOPIC_COLORS.length] }} />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{t.label}</div>
@@ -382,17 +413,27 @@ const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
                 </div>
               </div>
 
+              {/* ── Межкластерные связи — реальные из vos_data ── */}
               {clusterLinks.length > 0 && (
                 <div className="card">
-                  <p className="field-label" style={{ marginBottom: 10 }}>Межкластерные связи</p>
-                  {clusterLinks.map(({ a, b, w }) => (
-                    <div key={`${a}-${b}`} style={{ marginBottom: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                        <span style={{ fontSize: 11, color: 'var(--text-mid)' }}>{a} ↔ {b}</span>
-                        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--cyan)' }}>{w}</span>
+                  <p className="field-label" style={{ marginBottom: 4 }}>Межкластерные связи</p>
+                  <p style={{ fontSize: 10, color: 'var(--text-lo)', marginBottom: 10, fontFamily: 'var(--mono)' }}>
+                    // cosine similarity · топ-6 наиболее близких пар
+                  </p>
+                  {clusterLinks.map(({ a, b, w, color }) => (
+                    <div key={`${a}-${b}`} style={{ marginBottom: 10 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-mid)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+                          <span style={{ color, fontWeight: 600 }}>{a}</span>
+                          <span style={{ opacity: .5, margin: '0 4px' }}>↔</span>
+                          <span>{b}</span>
+                        </span>
+                        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-hi)', flexShrink: 0, marginLeft: 8 }}>
+                          {w.toFixed(3)}
+                        </span>
                       </div>
                       <div className="progress-track">
-                        <div className="progress-fill" style={{ width: `${w * 100}%`, background: 'linear-gradient(90deg, var(--cyan), rgba(0,212,255,.4))' }} />
+                        <div className="progress-fill" style={{ width: `${w * 100}%`, background: `linear-gradient(90deg, ${color}, ${color}66)` }} />
                       </div>
                     </div>
                   ))}
@@ -401,7 +442,7 @@ const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
             </div>
           </div>
 
-          {/* ── МЕСТО 3: Динамика тем — только если есть даты ── */}
+          {/* Динамика тем */}
           {dynamicsData && dynamicsData.length > 0 && (
             <div className="card" style={{ marginBottom: 20 }}>
               <p className="field-label" style={{ marginBottom: 12 }}>
@@ -420,16 +461,9 @@ const PageAnalytics = ({ btResult }: PageAnalyticsProps) => {
                         const label    = topics[topicIdx]?.label ?? `T${tid}`
                         return (
                           <div key={tid} title={`${label}: ${count} doc`} style={{
-                            height: 22,
-                            minWidth: 32,
-                            padding: '0 6px',
-                            background: color,
-                            borderRadius: 4,
-                            opacity: 0.85,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'default',
+                            height: 22, minWidth: 32, padding: '0 6px',
+                            background: color, borderRadius: 4, opacity: 0.85,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
                           }}>
                             <span style={{ fontSize: 9, color: '#000', fontWeight: 700, fontFamily: 'var(--mono)' }}>
                               T{tid}·{String(count)}
