@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Icon from '../components/Icon'
 import { runNatasha, onResult } from '../bridge'
+import type { ProcessedDocument } from './TopicDetailModal'
 
 /* ── LogEntry ── */
 const LogEntry = ({ level, text }: { level: string; text: string }) => {
@@ -43,12 +44,13 @@ interface DocStat {
 }
 
 interface PageNatashaProps {
-  settings: NatSettings
-  setSettings: React.Dispatch<React.SetStateAction<NatSettings>>
+  settings:       NatSettings
+  setSettings:    React.Dispatch<React.SetStateAction<NatSettings>>
+  setNatashaDocs: React.Dispatch<React.SetStateAction<ProcessedDocument[]>>  // ← ДОБАВЛЕНО
 }
 
 /* ── PageNatasha ── */
-const PageNatasha = ({ settings, setSettings }: PageNatashaProps) => {
+const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps) => {  // ← ДОБАВЛЕНО
   const [logs, setLogs] = useState([
     { level: 'info', text: 'Инициализация Natasha NLP pipeline...' },
     { level: 'ok',   text: 'Загружена модель NewsEmbedding (rubert-tiny2)' },
@@ -71,16 +73,13 @@ const PageNatasha = ({ settings, setSettings }: PageNatashaProps) => {
     }, 50)
   }
 
-  // Слушаем ответ от Python один раз
   useEffect(() => {
     onResult((data) => {
-      // Прогресс по документам
       if (data.action === 'natasha_progress') {
         addLog('info', `Обработка ${data.current}/${data.total}: ${data.name}`)
         return
       }
       if (data.action !== 'natasha_done') return
-
 
       data.documents.forEach((d: DocStat) => {
         addLog('ok', `${d.name} — ${d.tokens_count.toLocaleString()} токенов, ${d.chunks_count} чанков`)
@@ -91,6 +90,7 @@ const PageNatasha = ({ settings, setSettings }: PageNatashaProps) => {
       addLog('ok', `Готово · Всего токенов: ${data.total_tokens.toLocaleString()}`)
       setDocStats(data.documents)
       setTotalTokens(data.total_tokens)
+      setNatashaDocs(data.natasha_documents ?? [])  // ← полные данные с entities для TopicDetailModal
       setRunning(false)
       setDone(true)
     })
