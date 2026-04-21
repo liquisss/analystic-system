@@ -5,6 +5,7 @@ import PageUpload from './pages/PageUpload'
 import PageNatasha from './pages/PageNatasha'
 import PageBERTopic from './pages/PageBERTopic'
 import PageAnalytics from './pages/PageAnalytics'
+import type { ProcessedDocument } from './pages/TopicDetailModal'
 
 interface BtSettings {
   model: string
@@ -36,8 +37,8 @@ export interface BertopicResult {
   noise_pct: number
   coherence: number
   noise_count: number
-  vos_data?: any   // ← добавь
-  doc_topics?: DocTopic[]  // ← добавь
+  vos_data?: any
+  doc_topics?: DocTopic[]
 }
 
 function App() {
@@ -48,8 +49,13 @@ function App() {
     model: 'rubert-tiny2', minTopic: 5, numTopics: 'auto',
     umapComp: 5, outlierReduce: true, dynamicTopics: true, diversity: true
   })
-  const [btResult, setBtResult] = useState<BertopicResult | null>(null)
+  const [btResult, setBtResult]       = useState<BertopicResult | null>(null)
+  // ↓ ДОБАВЛЕНО: хранит documents из processed.json после шага Natasha
+  const [natashaDocs, setNatashaDocs] = useState<ProcessedDocument[]>([])
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+
+  const [thesaurus, setThesaurus] = useState<ThesaurusData | null>(null)
+
 
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -63,10 +69,13 @@ function App() {
   }
 
   const pages = [
-    <PageUpload files={files} setFiles={setFiles} />,
-    <PageNatasha settings={natSettings} setSettings={setNatSettings} />,
+    <PageUpload files={files} setFiles={setFiles} thesaurus={thesaurus} setThesaurus={setThesaurus} />,
+    // ↓ ИЗМЕНЕНО: передаём setNatashaDocs чтобы PageNatasha сохранял documents
+    <PageNatasha settings={natSettings} setSettings={setNatSettings} setNatashaDocs={setNatashaDocs} />,
     <PageBERTopic btSettings={btSettings} setBtSettings={setBtSettings} setBtResult={setBtResult} />,
-    <PageAnalytics btResult={btResult} />,
+    // ↓ ИЗМЕНЕНО: передаём natashaDocs в PageAnalytics
+    <PageAnalytics btResult={btResult} natashaDocs={natashaDocs} />,
+
   ]
 
   return (
