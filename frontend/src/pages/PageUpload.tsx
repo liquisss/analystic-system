@@ -2,20 +2,23 @@
 import { useState, useEffect } from 'react'
 import Icon from '../components/Icon'
 import { openFileDialog, onResult } from '../bridge'
+import ThesaurusModal, { ThesaurusData } from '../components/ThesaurusModal'
 
 interface PageUploadProps {
   files: { name: string; ext: string; size: number }[]
   setFiles: React.Dispatch<React.SetStateAction<{ name: string; ext: string; size: number }[]>>
+  thesaurus: ThesaurusData | null
+  setThesaurus: React.Dispatch<React.SetStateAction<ThesaurusData | null>>
 }
 
-const PageUpload = ({ files, setFiles }: PageUploadProps) => {
+const PageUpload = ({ files, setFiles, thesaurus, setThesaurus }: PageUploadProps) => {
   const [drag, setDrag] = useState(false)
-  const [loading, setLoading]         = useState(false)          // ← новое
-  const [loadProgress, setLoadProgress] = useState({             // ← новое
+  const [loading, setLoading]         = useState(false)
+  const [loadProgress, setLoadProgress] = useState({
     current: 0, total: 0, name: ''
   })
+  const [thesaurusOpen, setThesaurusOpen] = useState(false)
 
-  // Слушаем ответ от Python — один раз при монтировании
   useEffect(() => {
       onResult((data) => {
         if (data.action === 'file_loading_started') {
@@ -46,8 +49,6 @@ const PageUpload = ({ files, setFiles }: PageUploadProps) => {
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDrag(false)
-    // Drag-and-drop в Qt WebEngine не даёт реальных путей
-    // поэтому открываем диалог
     openFileDialog()
   }
 
@@ -58,6 +59,8 @@ const PageUpload = ({ files, setFiles }: PageUploadProps) => {
     const ext = name.split('.').pop()?.toLowerCase()
     return ({ pdf: 'var(--red)', docx: 'var(--cyan)', txt: 'var(--green)', csv: 'var(--amber)' } as Record<string, string>)[ext ?? ''] || 'var(--text-mid)'
   }
+
+  const thesaurusCount = thesaurus ? Object.keys(thesaurus).length : 0
 
   return (
     <div className="animate-fadeUp">
@@ -94,14 +97,14 @@ const PageUpload = ({ files, setFiles }: PageUploadProps) => {
         </div>
       </div>
 
-      {/* Drop zone — вызывает Qt диалог */}
+      {/* Drop zone */}
       <div
         className={`dropzone${drag ? ' drag-over' : ''}`}
         onClick={handleClick}
         onDragOver={e => { e.preventDefault(); setDrag(true) }}
         onDragLeave={() => setDrag(false)}
         onDrop={handleDrop}
-        style={{ marginBottom: 20 }}
+        style={{ marginBottom: 12 }}
       >
         <div className="scan" />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, pointerEvents: 'none' }}>
@@ -116,6 +119,69 @@ const PageUpload = ({ files, setFiles }: PageUploadProps) => {
               Поддерживаемые форматы: PDF, DOCX, TXT, CSV · Максимум 50 МБ
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* ── Тезаурус-панель ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 16, padding: '10px 14px',
+        background: 'var(--bg-deep)', borderRadius: 8,
+        border: thesaurus ? '1px solid rgba(0,188,212,.35)' : '1px solid var(--border)',
+        transition: 'border-color .2s'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: 7,
+            background: thesaurus ? 'var(--cyan-dim)' : 'var(--bg-card)',
+            border: `1px solid ${thesaurus ? 'var(--border-hi)' : 'var(--border)'}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, transition: 'all .2s'
+          }}>
+            <Icon name="file" size={14} color={thesaurus ? 'var(--cyan)' : 'var(--text-lo)'} />
+          </div>
+          <div>
+            {thesaurus ? (
+              <>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--cyan)' }}>
+                  Тезаурус активен
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--text-mid)', marginLeft: 8, fontFamily: 'var(--mono)' }}>
+                  {thesaurusCount} {thesaurusCount === 1 ? 'запись' : thesaurusCount < 5 ? 'записи' : 'записей'}
+                </span>
+              </>
+            ) : (
+              <span style={{ fontSize: 12, color: 'var(--text-lo)' }}>
+                Тезаурус не задан · опционально
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {thesaurus && (
+            <button
+              className="btn btn-ghost"
+              style={{ padding: '4px 10px', fontSize: 11, color: 'var(--red)' }}
+              onClick={() => setThesaurus(null)}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--red)')}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}
+            >
+              Удалить
+            </button>
+          )}
+          <button
+            className="btn btn-ghost"
+            style={{
+              padding: '4px 12px', fontSize: 11,
+              color: thesaurus ? 'var(--cyan)' : 'var(--text-mid)',
+              borderColor: thesaurus ? 'rgba(0,188,212,.4)' : 'var(--border)'
+            }}
+            onClick={() => setThesaurusOpen(true)}
+            onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--cyan)')}
+            onMouseLeave={e => (e.currentTarget.style.borderColor = thesaurus ? 'rgba(0,188,212,.4)' : 'var(--border)')}
+          >
+            {thesaurus ? '✏️  Изменить' : '📚  Добавить тезаурус'}
+          </button>
         </div>
       </div>
 
@@ -182,6 +248,14 @@ const PageUpload = ({ files, setFiles }: PageUploadProps) => {
           Файлы не выбраны
         </div>
       )}
+
+      {/* Thesaurus Modal */}
+      <ThesaurusModal
+        open={thesaurusOpen}
+        initial={thesaurus}
+        onApply={setThesaurus}
+        onClose={() => setThesaurusOpen(false)}
+      />
     </div>
   )
 }
