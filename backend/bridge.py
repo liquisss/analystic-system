@@ -63,6 +63,7 @@ class Bridge(QObject):
         try:
             settings  = json.loads(settings_json)
             documents = self.session.load_raw_all()
+            thesaurus_raw = settings.pop('thesaurus', None)
 
             if not documents:
                 self.error_occurred.emit(json.dumps({
@@ -87,16 +88,30 @@ class Bridge(QObject):
                     "action":       "natasha_done",
                     "total_docs":   result['total_docs'],
                     "total_tokens": result['total_tokens'],
+                    # documents — статистика для терминала и счётчиков в PageNatasha
+                    # содержит числа entities_count/dates_count, а не массивы
                     "documents": [
                         {
                             "name":           d['name'],
                             "tokens_count":   d['tokens_count'],
                             "chunks_count":   d['chunks_count'],
-                            "entities_count": len(d['entities']),
-                            "dates_count":    len(d['dates']),
+                            "entities_count": len(d.get('entities', [])),
+                            "dates_count":    len(d.get('dates', [])),
                         }
                         for d in result['documents']
-                    ]
+                    ],
+                    # natasha_documents — полные данные для TopicDetailModal
+                    # содержит entities [{text, type}] и dates для NER-бейджей
+                    "natasha_documents": [
+                        {
+                            "name":         d['name'],
+                            "tokens_count": d['tokens_count'],
+                            "chunks_count": d['chunks_count'],
+                            "entities":     d.get('entities', []),
+                            "dates":        d.get('dates', []),
+                        }
+                        for d in result['documents']
+                    ],
                 }))
 
             def on_error(data):
@@ -180,7 +195,7 @@ class Bridge(QObject):
                     "coherence":   result['coherence'],
                     "noise_count": result['noise_count'],
                     "vos_data":    vos_data,
-                    "doc_topics":  doc_topics_with_dates,  # ← даты внутри
+                    "doc_topics":  doc_topics_with_dates,
                     "has_dates":   has_dates,
                 }))
 
