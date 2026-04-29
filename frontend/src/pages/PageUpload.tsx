@@ -180,7 +180,7 @@ const PageUpload = ({ files, setFiles, thesaurus, setThesaurus }: PageUploadProp
             onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--cyan)')}
             onMouseLeave={e => (e.currentTarget.style.borderColor = thesaurus ? 'rgba(0,188,212,.4)' : 'var(--border)')}
           >
-            {thesaurus ? '✏️  Изменить' : '📚  Добавить тезаурус'}
+            {thesaurus ? 'Изменить' : 'Добавить тезаурус'}
           </button>
         </div>
       </div>
