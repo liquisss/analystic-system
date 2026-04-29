@@ -60,10 +60,19 @@ class Bridge(QObject):
 
     @pyqtSlot(str)
     def run_natasha(self, settings_json: str):
+        """
+        settings_json может содержать ключ 'thesaurus':
+            { ..., "thesaurus": { "евросоюз": ["ес", "eu"], ... } }
+        или 'thesaurus': null если тезаурус не задан.
+
+        Тезаурус извлекается ДО передачи settings в NatashaWorker,
+        чтобы worker получил чистые настройки, а тезаурус передаётся отдельно.
+        """
         try:
-            settings  = json.loads(settings_json)
-            documents = self.session.load_raw_all()
+            settings      = json.loads(settings_json)
+            # Извлекаем тезаурус — он не нужен внутри Natasha-настроек
             thesaurus_raw = settings.pop('thesaurus', None)
+            documents     = self.session.load_raw_all()
 
             if not documents:
                 self.error_occurred.emit(json.dumps({
@@ -72,8 +81,13 @@ class Bridge(QObject):
                 }))
                 return
 
-            print(f"[Bridge] запуск Natasha в потоке на {len(documents)} документах")
-            self._natasha_worker = NatashaWorker(documents, settings)
+            thesaurus_entries = len(thesaurus_raw) if thesaurus_raw else 0
+            print(f"[Bridge] Natasha: {len(documents)} документов, "
+                  f"тезаурус: {thesaurus_entries} записей")
+
+            self._natasha_worker = NatashaWorker(
+                documents, settings, thesaurus_raw=thesaurus_raw
+            )
 
             def on_progress(data):
                 self.result_ready.emit(json.dumps({
@@ -85,11 +99,12 @@ class Bridge(QObject):
                 result = json.loads(data)
                 self.session.save_natasha(result)
                 self.result_ready.emit(json.dumps({
-                    "action":       "natasha_done",
-                    "total_docs":   result['total_docs'],
-                    "total_tokens": result['total_tokens'],
-                    # documents — статистика для терминала и счётчиков в PageNatasha
-                    # содержит числа entities_count/dates_count, а не массивы
+                    "action":            "natasha_done",
+                    "total_docs":        result['total_docs'],
+                    "total_tokens":      result['total_tokens'],
+                    "thesaurus_applied": result.get('thesaurus_applied', False),
+                    "thesaurus_entries": result.get('thesaurus_entries', 0),
+                    # Статистика для PageNatasha (только числа)
                     "documents": [
                         {
                             "name":           d['name'],
@@ -100,8 +115,7 @@ class Bridge(QObject):
                         }
                         for d in result['documents']
                     ],
-                    # natasha_documents — полные данные для TopicDetailModal
-                    # содержит entities [{text, type}] и dates для NER-бейджей
+                    # Полные данные для TopicDetailModal (NER-бейджи)
                     "natasha_documents": [
                         {
                             "name":         d['name'],
@@ -139,7 +153,7 @@ class Bridge(QObject):
             settings     = json.loads(settings_json)
             natasha_data = self.session.load_natasha()
 
-            print(f"[Bridge] запуск BERTopic в потоке")
+            print(f"[Bridge] BERTopic запуск")
             self._bertopic_worker = BERTopicWorker(natasha_data, settings)
 
             def on_progress(data):
@@ -151,7 +165,6 @@ class Bridge(QObject):
             def on_finished(data):
                 result = json.loads(data)
 
-                # ── Строим VOSviewer JSON ──
                 vos_data = build_vosviewer_json(result)
                 result_to_save = {k: v for k, v in result.items() if k != 'topic_embeddings'}
                 self.session.save_bertopic(result_to_save)
@@ -160,7 +173,7 @@ class Bridge(QObject):
                 with open(vos_path, 'w', encoding='utf-8') as f:
                     json.dump(vos_data, f, ensure_ascii=False, indent=2)
 
-                # ── Собираем даты из Natasha по имени документа ──
+                # Даты из Natasha → привязываем к doc_topics
                 doc_dates = {}
                 for doc in natasha_data.get('documents', []):
                     dates = doc.get('dates', [])
@@ -171,13 +184,10 @@ class Bridge(QObject):
                             month = first.get('month')
                             day   = first.get('day')
                             date_str = str(year)
-                            if month:
-                                date_str += f"-{month:02d}"
-                            if day:
-                                date_str += f"-{day:02d}"
+                            if month: date_str += f"-{month:02d}"
+                            if day:   date_str += f"-{day:02d}"
                             doc_dates[doc['name']] = date_str
 
-                # ── Добавляем дату к каждому doc_topic ──
                 doc_topics_with_dates = []
                 for dt in result.get('doc_topics', []):
                     entry = dict(dt)
@@ -185,7 +195,9 @@ class Bridge(QObject):
                     doc_topics_with_dates.append(entry)
 
                 has_dates = any(d['date'] for d in doc_topics_with_dates)
-                print(f"[Bridge] документов с датами: {sum(1 for d in doc_topics_with_dates if d['date'])}/{len(doc_topics_with_dates)}")
+                print(f"[Bridge] документов с датами: "
+                      f"{sum(1 for d in doc_topics_with_dates if d['date'])}"
+                      f"/{len(doc_topics_with_dates)}")
 
                 self.result_ready.emit(json.dumps({
                     "action":      "bertopic_done",
