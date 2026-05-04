@@ -200,6 +200,7 @@ class Bridge(QObject):
                     "keywords_vos_path":      kw_vos_path,
                     "doc_topics":             doc_topics_with_dates,
                     "has_dates":              has_dates,
+                    "doc_positions": result.get('doc_positions', None),
                 }))
 
             def on_error(data):
@@ -225,8 +226,16 @@ class Bridge(QObject):
             params        = json.loads(params_json)
             sections      = params.get('sections', {})
             bertopic_data = self.session.load_bertopic()
+            natasha_data = self.session.load_natasha()
+
+            # Читаем vos_data из уже сохранённого файла
+            vos_path = os.path.join(self.session.bertopic_dir, 'vosviewer.json')
+            if os.path.exists(vos_path):
+                with open(vos_path, 'r', encoding='utf-8') as f:
+                    bertopic_data['vos_data'] = json.load(f)
+
             output_path   = os.path.join(self.session.root, 'report.pdf')
-            generate_report(bertopic_data, sections, output_path)
+            generate_report(bertopic_data, natasha_data, sections, output_path)  # ← добавить natasha_data
             self.result_ready.emit(json.dumps({
                 "action": "report_done", "path": output_path,
             }))
