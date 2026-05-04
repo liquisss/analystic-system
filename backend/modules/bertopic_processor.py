@@ -71,10 +71,6 @@ def _is_valid_word(word: str, extra_stop: set) -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MMR — без изменений
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _mmr_select_words(
     words_scores: list,
     model,
@@ -131,10 +127,6 @@ def _mmr_select_words(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Название темы — без изменений
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _make_topic_label(words: list, topic_id: int) -> str:
     if not words:
         return f"Тема {topic_id}"
@@ -160,10 +152,6 @@ def _make_topic_label(words: list, topic_id: int) -> str:
 
     return label[:47] + "..." if len(label) > 50 else label
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# NPMI когерентность — без изменений
-# ─────────────────────────────────────────────────────────────────────────────
 
 def compute_npmi_coherence(topics: list, texts: list, top_n: int = 5) -> float:
     if not topics or not texts:
@@ -212,10 +200,6 @@ def compute_npmi_coherence(topics: list, texts: list, top_n: int = 5) -> float:
     return round(float(np.mean(all_pairs)) * 100, 1)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# СКОЛЬЗЯЩЕЕ ОКНО
-# ─────────────────────────────────────────────────────────────────────────────
-
 def get_text_embedding_with_window(
     text: str, model, window: int = 256, stride: int = 128
 ) -> np.ndarray:
@@ -234,10 +218,6 @@ def get_text_embedding_with_window(
     embeddings = model.encode(chunks, show_progress_bar=False)
     return np.mean(embeddings, axis=0)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# РАЗБИВКА КРУПНЫХ ТЕМ — без изменений
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _maybe_split_large_topics(result_topics, doc_topics, doc_embeddings,
                                split_threshold=0.20):
@@ -300,8 +280,7 @@ def _maybe_split_large_topics(result_topics, doc_topics, doc_embeddings,
             new_doc_topics[global_i] = {**new_doc_topics[global_i], "topic": next_id + sl}
 
         for sub_lbl in sorted(real_sub):
-            sub_lbl_int = int(sub_lbl)
-            new_tid      = next_id + sub_lbl_int
+            new_tid      = next_id + sub_lbl
             sub_doc_idxs = [doc_idxs[li] for li, sl in enumerate(sub_labels) if sl == sub_lbl]
             suffix       = chr(65 + int(sub_lbl))
             new_topics.append({
@@ -320,6 +299,156 @@ def _maybe_split_large_topics(result_topics, doc_topics, doc_embeddings,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# КАРТА КЛЮЧЕВЫХ СЛОВ — реальные эмбеддинги слов
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_keywords_vos_data(topics: list, embedding_model,
+                             top_n_words: int = 8) -> dict:
+    """
+    Строит VOSviewer JSON для карты ключевых слов в виде разнесённых кластеров.
+
+    Чтобы получить читаемую сеть (кластеры разнесены, слова темы держатся
+    вместе, между кластерами редкие мостовые связи) применяем три приёма:
+
+    1. Внутрикластерные связи: strength = sim * BOOST (3.0)
+       Сильное притяжение → VOSviewer держит слова темы рядом.
+
+    2. Межкластерные связи: только топ-1 самая сильная пара на каждую
+       пару кластеров. Мостов мало → кластеры расходятся в пространстве.
+
+    3. Разные пороги:
+       - Внутри: sim >= 0.25 (мягкий — все слова темы связаны)
+       - Между:  sim >= 0.55 (строгий — только реально близкие)
+    """
+    if not topics:
+        return {}
+
+    # Собираем уникальные слова; если слово в нескольких темах — берём с max score
+    word_meta: dict = {}
+    for t_idx, topic in enumerate(topics):
+        words  = topic['words'][:top_n_words]
+        scores = topic['scores'][:top_n_words]
+        for w, s in zip(words, scores):
+            key = w.lower()
+            if key not in word_meta or s > word_meta[key]['score']:
+                word_meta[key] = {
+                    'label':       w,
+                    'cluster':     t_idx + 1,   # VOSviewer кластеры от 1
+                    'cluster_idx': t_idx,        # для логики связей
+                    'score':       float(s),
+                    'count':       topic['count'],
+                }
+
+    if len(word_meta) < 2:
+        return {}
+
+    all_words = list(word_meta.keys())
+    labels    = [word_meta[w]['label'] for w in all_words]
+    n         = len(all_words)
+
+    print(f"[Keywords VOS] кодируем {len(labels)} слов...")
+    try:
+        word_embeddings = embedding_model.encode(
+            labels, show_progress_bar=False, batch_size=64
+        )
+    except Exception as e:
+        print(f"[Keywords VOS] ошибка кодирования: {e}")
+        return {}
+
+    sim_matrix = cosine_similarity(word_embeddings)
+    max_score  = max(m['score'] for m in word_meta.values()) or 1.0
+
+    INTRA_THRESHOLD = 0.25   # внутри темы — мягкий порог
+    CROSS_THRESHOLD = 0.55   # между темами — строгий
+    INTRA_BOOST     = 3.0    # усилитель внутрикластерных связей
+
+    # Items
+    items = []
+    for idx, w in enumerate(all_words):
+        meta  = word_meta[w]
+        score = meta['score']
+        items.append({
+            "id":      idx + 1,
+            "label":   meta['label'],
+            "cluster": meta['cluster'],
+            "weights": {
+                "Score":     round((score / max_score) * 100, 2),
+                "Documents": meta['count'],
+            },
+            "scores": {
+                "TF-IDF": round(score, 6),
+            },
+        })
+
+    # Внутрикластерные связи (усиленные)
+    intra_links = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            if word_meta[all_words[i]]['cluster_idx'] != word_meta[all_words[j]]['cluster_idx']:
+                continue
+            sim = float(sim_matrix[i][j])
+            if sim >= INTRA_THRESHOLD:
+                intra_links.append({
+                    "source_id": i + 1,
+                    "target_id": j + 1,
+                    "strength":  round(sim * INTRA_BOOST, 4),
+                })
+
+    # Межкластерные мостовые связи — топ-N на каждую пару кластеров
+    # При 9 кластерах: 36 пар × 3 = ~108 мостов — достаточно для связности,
+    # но мало чтобы слить кластеры в клубок
+    CROSS_TOP_N = 3
+
+    # best_cross[(ci, cj)] = список (sim, i, j), сортируем и берём топ-N
+    cross_candidates: dict = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            ci = word_meta[all_words[i]]['cluster_idx']
+            cj = word_meta[all_words[j]]['cluster_idx']
+            if ci == cj:
+                continue
+            sim = float(sim_matrix[i][j])
+            if sim < CROSS_THRESHOLD:
+                continue
+            key = (min(ci, cj), max(ci, cj))
+            if key not in cross_candidates:
+                cross_candidates[key] = []
+            cross_candidates[key].append((sim, i, j))
+
+    cross_links = []
+    for key, candidates in cross_candidates.items():
+        # Сортируем по убыванию sim, берём топ-N
+        top = sorted(candidates, key=lambda x: -x[0])[:CROSS_TOP_N]
+        for sim, i, j in top:
+            cross_links.append({
+                "source_id": i + 1,
+                "target_id": j + 1,
+                "strength":  round(sim, 4),   # без буста — слабее внутрикластерных
+            })
+
+    links = intra_links + cross_links
+    print(f"[Keywords VOS] узлов: {len(items)}, "
+          f"внутри: {len(intra_links)}, мосты: {len(cross_links)}")
+
+    # Fallback если совсем нет внутрикластерных связей
+    if not intra_links:
+        print("[Keywords VOS] нет внутрикластерных связей, снижаем порог до 0.15")
+        for i in range(n):
+            for j in range(i + 1, n):
+                if word_meta[all_words[i]]['cluster_idx'] != word_meta[all_words[j]]['cluster_idx']:
+                    continue
+                sim = float(sim_matrix[i][j])
+                if sim >= 0.15:
+                    links.append({
+                        "source_id": i + 1,
+                        "target_id": j + 1,
+                        "strength":  round(sim * INTRA_BOOST, 4),
+                    })
+
+    return {"network": {"items": items, "links": links}}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ОСНОВНАЯ ФУНКЦИЯ
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -328,22 +457,11 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
     Hybrid representation:
       text_raw   → скользящее окно → эмбеддинги → UMAP + HDBSCAN (кластеризация)
       text_clean → CountVectorizer → c-TF-IDF (ключевые слова и названия тем)
-
-    Это даёт:
-      - точную кластеризацию (BERT видит живой язык, пунктуацию, контекст)
-      - читаемые ключевые слова (только леммы + синонимы из тезауруса, без мусора)
     """
     documents = natasha_data.get('documents', [])
     if not documents:
         raise ValueError("Нет документов для анализа")
 
-    # ── Два представления текста ──────────────────────────────────────────────
-    # text_raw   — исходный текст (clean_text без лемматизации) → для эмбеддингов
-    # text_clean — леммы + тезаурус → для c-TF-IDF
-    #
-    # Если text_raw отсутствует (старые сессии без обновления natasha_processor)
-    # — используем text_clean как fallback для обратной совместимости.
-    # ─────────────────────────────────────────────────────────────────────────
     raw_pairs = [
         (d.get('text_raw') or d['text_clean'], d['text_clean'], d['name'])
         for d in documents
@@ -364,7 +482,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
     print(f"[BERTopic] документов: {n}")
     print(f"[BERTopic] hybrid mode: эмбеддинги на text_raw, c-TF-IDF на text_clean")
 
-    # ── Стоп-слова ────────────────────────────────────────────────────────────
     custom_stop_raw = settings.get('customStop', '')
     user_stop = {
         w.strip().lower()
@@ -372,13 +489,10 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
     }
     all_stop = EXTRA_STOPWORDS_RU | user_stop
 
-    # ── Embedding модель ──────────────────────────────────────────────────────
     model_key       = settings.get('model', 'rubert-tiny2')
     model_name      = MODEL_MAP.get(model_key, MODEL_MAP['rubert-tiny2'])
     embedding_model = get_embedding_model(model_name)
 
-    # ── Эмбеддинги на ИСХОДНОМ тексте (text_raw) ─────────────────────────────
-    # BERT видит живой язык → точная кластеризация смысловых групп
     print("[BERTopic] вычисление embeddings на исходном тексте (text_raw)...")
     doc_embeddings = []
     for i, text in enumerate(texts_raw):
@@ -387,7 +501,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         doc_embeddings.append(emb)
     doc_embeddings = np.array(doc_embeddings)
 
-    # ── UMAP ──────────────────────────────────────────────────────────────────
     n_comp = settings.get('umapComp', 5)
     if n < 10:
         from bertopic.dimensionality import BaseDimensionalityReduction
@@ -404,7 +517,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         )
         print(f"[BERTopic] UMAP: n_neighbors={n_neighbors}, n_components={min(n_comp, n-2)}")
 
-    # ── HDBSCAN ───────────────────────────────────────────────────────────────
     if n < 15:
         min_cs = 2
     elif n < 40:
@@ -427,8 +539,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         cluster_selection_method='leaf',
     )
 
-    # ── CountVectorizer на text_clean ─────────────────────────────────────────
-    # c-TF-IDF строится на леммах + тезаурус → ключевые слова без мусора
     vectorizer = CountVectorizer(
         min_df=max(1, min(2, n // 5)),
         max_df=0.85,
@@ -451,22 +561,12 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         verbose=True,
     )
 
-    # ── fit_transform: КЛЮЧЕВОЙ МОМЕНТ HYBRID APPROACH ────────────────────────
-    #
-    # texts_clean → CountVectorizer / c-TF-IDF (ключевые слова тем)
-    # embeddings= → doc_embeddings уже посчитаны на texts_raw (исходный текст)
-    #
-    # BERTopic НЕ будет пересчитывать эмбеддинги сам — использует наши.
-    # Это и есть разделение: кластеризация на живом тексте,
-    # ключевые слова на чистых леммах.
-    # ─────────────────────────────────────────────────────────────────────────
     print("[BERTopic] обучение модели (hybrid: raw embeddings + clean c-TF-IDF)...")
     topics, _ = topic_model.fit_transform(
-        texts_clean,               # ← c-TF-IDF строится на леммах
-        embeddings=doc_embeddings  # ← кластеризация на исходном тексте
+        texts_clean,
+        embeddings=doc_embeddings
     )
 
-    # ── Снижение шума ─────────────────────────────────────────────────────────
     if settings.get('outlierReduce', True) and n >= 10:
         try:
             print("[BERTopic] снижение шума...")
@@ -478,7 +578,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         except ValueError as e:
             print(f"[BERTopic] снижение шума пропущено: {e}")
 
-    # ── Сбор результатов с MMR ────────────────────────────────────────────────
     topic_info    = topic_model.get_topic_info()
     result_topics = []
     used_labels   = set()
@@ -522,7 +621,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
             'scores': scores,
         })
 
-    # ── Embeddings тем для VOSviewer ──────────────────────────────────────────
     topic_embeddings = None
     try:
         all_emb = topic_model.topic_embeddings_
@@ -544,7 +642,6 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
     noise_count = sum(1 for t in topics if t == -1)
     noise_pct   = round(noise_count / len(topics) * 100, 1)
 
-    # ── Разбивка крупных тем ──────────────────────────────────────────────────
     if settings.get('splitLargeTopics', True) and len(result_topics) > 0:
         result_topics, doc_topics = _maybe_split_large_topics(
             result_topics=result_topics,
@@ -555,26 +652,33 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         noise_count = sum(1 for dt in doc_topics if dt['topic'] == -1)
         noise_pct   = round(noise_count / len(doc_topics) * 100, 1)
 
-    # ── NPMI когерентность на text_clean ─────────────────────────────────────
-    # Считаем на text_clean — именно по нему строились ключевые слова
     print("[BERTopic] вычисление NPMI когерентности...")
     coherence = compute_npmi_coherence(result_topics, texts_clean, top_n=5)
     print(f"[BERTopic] NPMI когерентность: {coherence}%")
     print(f"[BERTopic] тем: {len(result_topics)}, шум: {noise_pct}%")
 
+    # ── Строим карту ключевых слов с реальными эмбеддингами ──
+    print("[BERTopic] строим карту ключевых слов...")
+    keywords_vos_data = build_keywords_vos_data(
+        topics=result_topics,
+        embedding_model=embedding_model,
+        top_n_words=8,
+    )
+
     return {
-        'topics':           result_topics,
-        'doc_topics':       doc_topics,
-        'total_docs':       len(texts_raw),
-        'noise_count':      noise_count,
-        'noise_pct':        noise_pct,
-        'coherence':        coherence,
-        'topic_embeddings': topic_embeddings.tolist() if topic_embeddings is not None else None,
+        'topics':             result_topics,
+        'doc_topics':         doc_topics,
+        'total_docs':         len(texts_raw),
+        'noise_count':        noise_count,
+        'noise_pct':          noise_pct,
+        'coherence':          coherence,
+        'topic_embeddings':   topic_embeddings.tolist() if topic_embeddings is not None else None,
+        'keywords_vos_data':  keywords_vos_data,   # ← новое поле
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# VOSviewer — без изменений
+# VOSviewer для кластеров — без изменений
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_vosviewer_json(bertopic_result: dict) -> dict:
