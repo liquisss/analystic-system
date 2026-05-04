@@ -5,11 +5,19 @@ import type { BertopicResult, TopicResult, DocTopic } from '../App'
 import { generatePdfReport, saveFileDialog, onResult, readJsonFile } from '../bridge'
 import { TopicDetailModal } from './TopicDetailModal'
 import type { ProcessedDocument } from './TopicDetailModal'
+import PageDocMap from './PageDocMap'
 
 const TOPIC_COLORS = [
-  '#00d4ff', '#f59e0b', '#10b981', '#a78bfa',
-  '#f87171', '#34d399', '#60a5fa', '#f472b6',
-  '#fb923c', '#a3e635',
+  '#e8413b', // cluster 1 — красный
+  '#177dbe', // cluster 2 — синий
+  '#0ea54b', // cluster 3 — зелёный
+  '#fc8c00', // cluster 4 — оранжевый
+  '#8e409a', // cluster 5 — фиолетовый
+  '#cc0e74', // cluster 6 — малиновый
+  '#b8b008', // cluster 7 — жёлто-оливковый
+  '#00aba5', // cluster 8 — бирюзовый
+  '#6d3f1f', // cluster 9 — коричневый
+  '#5b5b5b', // cluster 10 — серый
 ]
 
 interface BarItem { l: string; v: number }
@@ -45,6 +53,7 @@ const ReportModal = ({ onClose, btResult }: { onClose: () => void; btResult: Ber
   const [preview, setPreview]       = useState(false)
   const [generating, setGenerating] = useState(false)
   const [reportPath, setReportPath] = useState<string | null>(null)
+  const [savedPath, setSavedPath]   = useState<string | null>(null)
   const [error, setError]           = useState<string | null>(null)
   const [sections, setSections]     = useState<Sections>({
     summary: true, topics: true, vos: true, stats: true,
@@ -59,7 +68,10 @@ const ReportModal = ({ onClose, btResult }: { onClose: () => void; btResult: Ber
         if (data.error) setError(`Ошибка: ${data.error}`)
         else setReportPath(data.path)
       }
-      if (data.action === 'file_saved') setError(null)
+      if (data.action === 'file_saved') {
+          setError(null)
+          setSavedPath(data.path)
+      }
     })
   }, [])
 
@@ -99,6 +111,12 @@ const ReportModal = ({ onClose, btResult }: { onClose: () => void; btResult: Ber
               <div style={{ padding: '10px 14px', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.3)', borderRadius: 8, marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ PDF сформирован — выберите место сохранения</span>
                 <button className="btn btn-primary" onClick={handleSave} style={{ padding: '6px 14px', fontSize: 12 }}><Icon name="download" size={13} /> Сохранить</button>
+              </div>
+            )}
+            {savedPath && (
+              <div style={{ padding: '10px 14px', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.3)', borderRadius: 8, marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: 'var(--green)', fontWeight: 700, marginBottom: 4 }}>✓ Отчёт сохранён</div>
+                <div style={{ fontSize: 11, color: 'var(--text-mid)', fontFamily: 'var(--mono)', wordBreak: 'break-all' }}>{savedPath}</div>
               </div>
             )}
             <div style={{ display: 'flex', gap: 12 }}>
@@ -158,7 +176,7 @@ interface PageAnalyticsProps {
 }
 
 const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
-  const [tab, setTab]                     = useState<'analytics' | 'vos'>('analytics')
+  const [tab, setTab] = useState<'analytics' | 'vos' | 'docmap'>('analytics')
   const [selectedTopic, setSelectedTopic] = useState<number | null>(null)
   const [showReport, setShowReport]       = useState(false)
   const [detailTopic, setDetailTopic]     = useState<TopicResult | null>(null)
@@ -325,6 +343,9 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
         <button className={`tab${tab === 'vos' ? ' active' : ''}`} onClick={() => setTab('vos')}>
           <Icon name="network" size={13} /> VOSviewer
         </button>
+        <button className={`tab${tab === 'docmap' ? ' active' : ''}`} onClick={() => setTab('docmap')}>
+          <Icon name="network" size={13} /> Карта документов
+        </button>
       </div>
 
       {/* Analytics tab */}
@@ -395,29 +416,126 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
           </div>
 
           {dynamicsData && dynamicsData.length > 0 && (
-            <div className="card" style={{ marginBottom: 20 }}>
-              <p className="field-label" style={{ marginBottom: 12 }}>Динамика тем · по датам из документов</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {dynamicsData.map(({ date, topicCounts }) => (
-                  <div key={date} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-lo)', minWidth: 90, flexShrink: 0 }}>{date}</span>
-                    <div style={{ flex: 1, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {Object.entries(topicCounts).map(([tid, count]) => {
-                        const topicIdx = topics.findIndex(t => t.id === Number(tid))
-                        const color    = TOPIC_COLORS[topicIdx % TOPIC_COLORS.length]
-                        const label    = topics[topicIdx]?.label ?? `T${tid}`
-                        return (
-                          <div key={tid} title={`${label}: ${count} doc`} style={{ height: 22, minWidth: 32, padding: '0 6px', background: color, borderRadius: 4, opacity: 0.85, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <span style={{ fontSize: 9, color: '#000', fontWeight: 700, fontFamily: 'var(--mono)' }}>T{tid}·{String(count)}</span>
-                          </div>
-                        )
-                      })}
+              <div className="card" style={{ marginBottom: 20 }}>
+                <p className="field-label" style={{ marginBottom: 4 }}>Динамика тем</p>
+                <p style={{ fontSize: 10, color: 'var(--text-lo)', marginBottom: 14, fontFamily: 'var(--mono)' }}>
+                  цвет ячейки — количество документов: тема × дата
+                </p>
+
+                {(() => {
+                  const dates     = dynamicsData.map(d => d.date)
+                  const maxVal    = Math.max(...dynamicsData.flatMap(d => Object.values(d.topicCounts)))
+
+                  return (
+                    <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 400 }}>
+                      <table style={{ borderCollapse: 'separate', borderSpacing: 3, width: '100%' }}>
+                        <thead>
+                          <tr>
+                            {/* Пустая ячейка для строки с названиями тем */}
+                            <td style={{
+                              minWidth:   120,
+                              position:   'sticky',
+                              left:       0,
+                              zIndex:     3,
+                              background: 'var(--bg-card)',
+                            }} />
+                            {dates.map(date => (
+                              <td key={date} style={{
+                                textAlign:  'center',
+                                fontSize:   9,
+                                color:      'var(--text-lo)',
+                                fontFamily: 'var(--mono)',
+                                paddingBottom: 6,
+                                minWidth:   36,
+                                whiteSpace: 'nowrap',
+                              }}>
+                                {date}
+                              </td>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {topics.map((t, i) => {
+                            const color = TOPIC_COLORS[i % TOPIC_COLORS.length]
+                            return (
+                              <tr key={t.id}>
+                                {/* Название темы */}
+                                <td style={{
+                                  fontSize:     11,
+                                  fontWeight:   600,
+                                  paddingRight: 10,
+                                  whiteSpace:   'nowrap',
+                                  overflow:     'hidden',
+                                  textOverflow: 'ellipsis',
+                                  maxWidth:     120,
+                                  color:        color,
+                                  position:   'sticky',
+                                  left:       0,
+                                  zIndex:     2,
+                                  background: 'var(--bg-card)', // чтобы перекрывал ячейки при скролле
+                                }} title={t.label}>
+                                  {t.label.length > 18 ? t.label.slice(0, 18) + '…' : t.label}
+                                </td>
+
+                                {/* Ячейки хитмапа */}
+                                {dynamicsData.map(({ date, topicCounts }) => {
+                                  const val     = topicCounts[t.id] ?? 0
+                                  const opacity = val === 0 ? 0 : 0.15 + (val / maxVal) * 0.85
+                                  return (
+                                    <td key={date} title={val > 0 ? `${t.label} · ${date}: ${val} doc` : undefined}
+                                      style={{
+                                        width:        36,
+                                        height:       28,
+                                        borderRadius: 4,
+                                        background:   val === 0
+                                          ? 'var(--bg-deep)'
+                                          : `${color}${Math.round(opacity * 255).toString(16).padStart(2, '0')}`,
+                                        opacity:      1,
+                                        textAlign:    'center',
+                                        verticalAlign:'middle',
+                                        cursor:       val > 0 ? 'default' : undefined,
+                                        border:       '1px solid var(--border)',
+                                        transition:   'opacity .15s',
+                                      }}>
+                                      {val > 0 && (
+                                        <span style={{
+                                          fontSize:   9,
+                                          fontFamily: 'var(--mono)',
+                                          fontWeight: 700,
+                                          color:      opacity > 0.6 ? '#000' : color,
+                                        }}>
+                                          {val}
+                                        </span>
+                                      )}
+                                    </td>
+                                  )
+                                })}
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+
+                      {/* Легенда градиента */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                        <span style={{ fontSize: 9, color: 'var(--text-lo)', fontFamily: 'var(--mono)' }}>0</span>
+                        <div style={{
+                          flex:         1,
+                          height:       6,
+                          borderRadius: 3,
+                          background:   'linear-gradient(90deg, var(--bg-deep), var(--cyan))',
+                          maxWidth:     120,
+                          border:       '1px solid var(--border)',
+                        }} />
+                        <span style={{ fontSize: 9, color: 'var(--text-lo)', fontFamily: 'var(--mono)' }}>{maxVal} doc</span>
+                        <span style={{ fontSize: 9, color: 'var(--text-lo)', fontFamily: 'var(--mono)', marginLeft: 8 }}>
+                          наведите на ячейку для подсказки
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })()}
               </div>
-              <p style={{ fontSize: 10, color: 'var(--text-lo)', marginTop: 10, fontFamily: 'var(--mono)' }}>// даты извлечены Natasha · наведите на блок для подсказки</p>
-            </div>
           )}
 
           <div className="card" style={{ borderLeft: '3px solid var(--cyan)' }}>
@@ -588,6 +706,9 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
             )
           )}
         </div>
+      )}
+      {tab === 'docmap' && (
+          <PageDocMap btResult={btResult} natashaDocs={natashaDocs} />
       )}
     </div>
   )
