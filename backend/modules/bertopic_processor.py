@@ -638,6 +638,27 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
     except Exception as e:
         print(f"[BERTopic] embeddings тем недоступны: {e}")
 
+    # 2D UMAP для визуализации карты документов
+    doc_positions = None
+    try:
+        print("[BERTopic] вычисляем 2D позиции для карты документов...")
+        umap_2d = UMAP(
+            n_components=2,
+            n_neighbors=max(2, min(15, n // 5)),
+            min_dist=0.1,
+            metric='cosine',
+            random_state=42,
+            low_memory=True,
+        )
+        positions_2d = umap_2d.fit_transform(doc_embeddings)
+        doc_positions = [
+            {'x': round(float(p[0]), 4), 'y': round(float(p[1]), 4)}
+            for p in positions_2d
+        ]
+        print(f"[BERTopic] 2D позиции готовы: {len(doc_positions)} документов")
+    except Exception as e:
+        print(f"[BERTopic] 2D UMAP ошибка: {e}")
+
     doc_topics  = [{'name': nm, 'topic': int(t)} for nm, t in zip(names, topics)]
     noise_count = sum(1 for t in topics if t == -1)
     noise_pct   = round(noise_count / len(topics) * 100, 1)
@@ -673,7 +694,8 @@ def run_bertopic(settings: dict, natasha_data: dict) -> dict:
         'noise_pct':          noise_pct,
         'coherence':          coherence,
         'topic_embeddings':   topic_embeddings.tolist() if topic_embeddings is not None else None,
-        'keywords_vos_data':  keywords_vos_data,   # ← новое поле
+        'keywords_vos_data':  keywords_vos_data,   # для визуализации слов
+        'doc_positions': doc_positions, #для визуализации доков
     }
 
 
