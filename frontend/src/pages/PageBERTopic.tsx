@@ -100,6 +100,7 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
         vos_data:          data.vos_data,
         keywords_vos_path: data.keywords_vos_path ?? null,
         doc_topics:        data.doc_topics ?? [],
+        doc_positions: data.doc_positions ?? null,
       })
     })
   }, [])
