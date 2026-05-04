@@ -46,7 +46,6 @@ export function callPython(method: string, arg: string = ''): void {
   backendObject[method](arg)
 }
 
-// Теперь onResult просто регистрирует колбек в массив
 export function onResult(callback: BridgeCallback): void {
   resultCallbacks.push(callback)
 }
@@ -83,4 +82,21 @@ export function generatePdfReport(sections: Record<string, boolean>): void {
 export function saveFileDialog(sourcePath: string): void {
   if (!backendObject) return
   backendObject.save_file_dialog(sourcePath)
+}
+
+/**
+ * Читает JSON-файл из файловой системы через Qt-мост.
+ * Используется вместо fetch('file://...') — десктопное приложение
+ * работает через http://localhost:5173 (Vite), поэтому file:// заблокирован CORS.
+ *
+ * Ответ приходит в onResult как:
+ *   { action: 'file_read_done', key: path, data: {...} }  — успех
+ *   { action: 'file_read_done', key: path, error: '...' } — ошибка
+ */
+export function readJsonFile(path: string): void {
+  if (!backendObject) {
+    console.warn('[Bridge] мост не инициализирован')
+    return
+  }
+  backendObject.read_json_file(path)
 }
