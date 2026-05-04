@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react'
 import { runBertopic, onResult } from '../bridge'
 import type { BertopicResult, TopicResult } from '../App'
 
-/* ── ProgressRing ── */
 const ProgressRing = ({ pct, color = 'var(--cyan)', size = 72 }: {
   pct: number; color?: string; size?: number
 }) => {
@@ -20,7 +19,6 @@ const ProgressRing = ({ pct, color = 'var(--cyan)', size = 72 }: {
   )
 }
 
-/* ── Types ── */
 interface BtSettings {
   model?: string
   minTopic?: number
@@ -37,7 +35,6 @@ interface PageBERTopicProps {
   setBtResult: React.Dispatch<React.SetStateAction<BertopicResult | null>>
 }
 
-/* ── PageBERTopic ── */
 const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicProps) => {
   const [running, setRunning]       = useState(false)
   const [progress, setProgress]     = useState(0)
@@ -84,7 +81,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
         return
       }
 
-      // Сохраняем в локальный стейт
       setTopics(data.topics)
       setTotalDocs(data.total_docs)
       setCoherence(data.coherence)
@@ -95,15 +91,15 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
       setRunning(false)
       setDone(true)
 
-      // Передаём результат наверх в App
       setBtResult({
-        topics:     data.topics,
-        total_docs: data.total_docs,
-        noise_pct:  data.noise_pct,
-        coherence:  data.coherence,
-        noise_count: data.noise_count,
-        vos_data:    data.vos_data,
-        doc_topics: data.doc_topics ?? [],
+        topics:            data.topics,
+        total_docs:        data.total_docs,
+        noise_pct:         data.noise_pct,
+        coherence:         data.coherence,
+        noise_count:       data.noise_count,
+        vos_data:          data.vos_data,
+        keywords_vos_path: data.keywords_vos_path ?? null,
+        doc_topics:        data.doc_topics ?? [],
       })
     })
   }, [])
@@ -148,10 +144,8 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
-        {/* Settings */}
         <div className="card">
           <p className="field-label" style={{ marginBottom: 14 }}>Параметры модели</p>
-
           <div style={{ marginBottom: 14 }}>
             <label className="field-label">Embedding модель</label>
             <select className="field-input field-select"
@@ -162,7 +156,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
               <option value="labse">LaBSE (тяжёлая)</option>
             </select>
           </div>
-
           <div style={{ marginBottom: 14 }}>
             <label className="field-label">
               Мин. размер топика: <span style={{ color: 'var(--cyan)' }}>{btSettings.minTopic ?? 5}</span>
@@ -171,7 +164,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
               value={btSettings.minTopic ?? 5}
               onChange={e => update('minTopic', +e.target.value)} />
           </div>
-
           <div style={{ marginBottom: 14 }}>
             <label className="field-label">Количество топиков</label>
             <select className="field-input field-select"
@@ -183,7 +175,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
               <option value="20">20</option>
             </select>
           </div>
-
           <div style={{ marginBottom: 14 }}>
             <label className="field-label">
               UMAP компоненты: <span style={{ color: 'var(--cyan)' }}>{btSettings.umapComp ?? 5}</span>
@@ -192,7 +183,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
               value={btSettings.umapComp ?? 5}
               onChange={e => update('umapComp', +e.target.value)} />
           </div>
-
           {CHECKBOXES.map(([k, label]) => (
             <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <input type="checkbox" id={k}
@@ -203,7 +193,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
           ))}
         </div>
 
-        {/* Progress */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card" style={{ flex: 1 }}>
             <p className="field-label" style={{ marginBottom: 16 }}>Прогресс анализа</p>
@@ -221,7 +210,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
               {stage === 'idle' ? 'Ожидание запуска...' : stage}
             </p>
           </div>
-
           <div className="card">
             <p className="field-label" style={{ marginBottom: 10 }}>Этапы конвейера</p>
             {PIPELINE_STAGES.map((s, i) => {
@@ -239,7 +227,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
         </div>
       </div>
 
-      {/* Кнопка */}
       <button className="btn btn-amber" onClick={runAnalysis} disabled={running}
         style={{ width: '100%', justifyContent: 'center', padding: '13px' }}>
         {running
@@ -247,7 +234,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
           : done ? '↺ Запустить повторно' : '▶ Запустить BERTopic анализ'}
       </button>
 
-      {/* Результаты */}
       {done && (
         <>
           <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
@@ -263,7 +249,6 @@ const PageBERTopic = ({ btSettings, setBtSettings, setBtResult }: PageBERTopicPr
               </div>
             ))}
           </div>
-
           {topics.length > 0 && (
             <div className="card" style={{ marginTop: 16 }}>
               <p className="field-label" style={{ marginBottom: 12 }}>Выявленные темы</p>
