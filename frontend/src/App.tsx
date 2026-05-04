@@ -32,6 +32,11 @@ export interface DocTopic {
   date: string | null
 }
 
+export interface DocPosition {
+  x: number
+  y: number
+}
+
 export interface BertopicResult {
   topics: TopicResult[]
   total_docs: number
@@ -43,6 +48,7 @@ export interface BertopicResult {
   // Данные не передаются через сигнал (может быть >100KB) — фронт читает файл сам.
   keywords_vos_path?: string | null
   doc_topics?: DocTopic[]
+  doc_positions?: DocPosition[] | null
 }
 
 function App() {
