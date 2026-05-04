@@ -40,17 +40,12 @@ class Bridge(QObject):
 
         self._file_worker = FileLoaderWorker(paths, self.session)
 
-        def on_progress(data):
-            self.result_ready.emit(data)
-
-        def on_finished(data):
-            self.result_ready.emit(data)
-
+        def on_progress(data): self.result_ready.emit(data)
+        def on_finished(data): self.result_ready.emit(data)
         def on_error(data):
             err = json.loads(data)
             self.error_occurred.emit(json.dumps({
-                "action": "files_selected",
-                "error":  err['error']
+                "action": "files_selected", "error": err['error']
             }))
 
         self._file_worker.progress.connect(on_progress)
@@ -60,17 +55,8 @@ class Bridge(QObject):
 
     @pyqtSlot(str)
     def run_natasha(self, settings_json: str):
-        """
-        settings_json может содержать ключ 'thesaurus':
-            { ..., "thesaurus": { "евросоюз": ["ес", "eu"], ... } }
-        или 'thesaurus': null если тезаурус не задан.
-
-        Тезаурус извлекается ДО передачи settings в NatashaWorker,
-        чтобы worker получил чистые настройки, а тезаурус передаётся отдельно.
-        """
         try:
             settings      = json.loads(settings_json)
-            # Извлекаем тезаурус — он не нужен внутри Natasha-настроек
             thesaurus_raw = settings.pop('thesaurus', None)
             documents     = self.session.load_raw_all()
 
@@ -81,9 +67,8 @@ class Bridge(QObject):
                 }))
                 return
 
-            thesaurus_entries = len(thesaurus_raw) if thesaurus_raw else 0
             print(f"[Bridge] Natasha: {len(documents)} документов, "
-                  f"тезаурус: {thesaurus_entries} записей")
+                  f"тезаурус: {len(thesaurus_raw) if thesaurus_raw else 0} записей")
 
             self._natasha_worker = NatashaWorker(
                 documents, settings, thesaurus_raw=thesaurus_raw
@@ -91,8 +76,7 @@ class Bridge(QObject):
 
             def on_progress(data):
                 self.result_ready.emit(json.dumps({
-                    **json.loads(data),
-                    "action": "natasha_progress"
+                    **json.loads(data), "action": "natasha_progress"
                 }))
 
             def on_finished(data):
@@ -104,7 +88,6 @@ class Bridge(QObject):
                     "total_tokens":      result['total_tokens'],
                     "thesaurus_applied": result.get('thesaurus_applied', False),
                     "thesaurus_entries": result.get('thesaurus_entries', 0),
-                    # Статистика для PageNatasha (только числа)
                     "documents": [
                         {
                             "name":           d['name'],
@@ -115,7 +98,6 @@ class Bridge(QObject):
                         }
                         for d in result['documents']
                     ],
-                    # Полные данные для TopicDetailModal (NER-бейджи)
                     "natasha_documents": [
                         {
                             "name":         d['name'],
@@ -131,8 +113,7 @@ class Bridge(QObject):
             def on_error(data):
                 err = json.loads(data)
                 self.error_occurred.emit(json.dumps({
-                    "action": "natasha_done",
-                    "error":  err['error']
+                    "action": "natasha_done", "error": err['error']
                 }))
 
             self._natasha_worker.progress.connect(on_progress)
@@ -141,8 +122,7 @@ class Bridge(QObject):
             self._natasha_worker.start()
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             self.error_occurred.emit(json.dumps({
                 "action": "natasha_done", "error": str(e)
             }))
@@ -158,22 +138,32 @@ class Bridge(QObject):
 
             def on_progress(data):
                 self.result_ready.emit(json.dumps({
-                    **json.loads(data),
-                    "action": "bertopic_progress"
+                    **json.loads(data), "action": "bertopic_progress"
                 }))
 
             def on_finished(data):
                 result = json.loads(data)
 
-                vos_data = build_vosviewer_json(result)
-                result_to_save = {k: v for k, v in result.items() if k != 'topic_embeddings'}
+                vos_data         = build_vosviewer_json(result)
+                # keywords_vos_data уже в result — из run_bertopic
+                keywords_vos_data = result.get('keywords_vos_data', {})
+
+                result_to_save = {
+                    k: v for k, v in result.items()
+                    if k not in ('topic_embeddings',)
+                }
                 self.session.save_bertopic(result_to_save)
 
                 vos_path = os.path.join(self.session.bertopic_dir, 'vosviewer.json')
                 with open(vos_path, 'w', encoding='utf-8') as f:
                     json.dump(vos_data, f, ensure_ascii=False, indent=2)
 
-                # Даты из Natasha → привязываем к doc_topics
+                # Сохраняем keywords vos отдельным файлом
+                kw_vos_path = os.path.join(self.session.bertopic_dir, 'vosviewer_keywords.json')
+                with open(kw_vos_path, 'w', encoding='utf-8') as f:
+                    json.dump(keywords_vos_data, f, ensure_ascii=False, indent=2)
+
+                # Даты
                 doc_dates = {}
                 for doc in natasha_data.get('documents', []):
                     dates = doc.get('dates', [])
@@ -195,27 +185,27 @@ class Bridge(QObject):
                     doc_topics_with_dates.append(entry)
 
                 has_dates = any(d['date'] for d in doc_topics_with_dates)
-                print(f"[Bridge] документов с датами: "
-                      f"{sum(1 for d in doc_topics_with_dates if d['date'])}"
-                      f"/{len(doc_topics_with_dates)}")
 
                 self.result_ready.emit(json.dumps({
-                    "action":      "bertopic_done",
-                    "topics":      result['topics'],
-                    "total_docs":  result['total_docs'],
-                    "noise_pct":   result['noise_pct'],
-                    "coherence":   result['coherence'],
-                    "noise_count": result['noise_count'],
-                    "vos_data":    vos_data,
-                    "doc_topics":  doc_topics_with_dates,
-                    "has_dates":   has_dates,
+                    "action":                 "bertopic_done",
+                    "topics":                 result['topics'],
+                    "total_docs":             result['total_docs'],
+                    "noise_pct":              result['noise_pct'],
+                    "coherence":              result['coherence'],
+                    "noise_count":            result['noise_count'],
+                    "vos_data":               vos_data,
+                    # keywords_vos_data может быть большим (>100KB при многих темах),
+                    # поэтому НЕ передаём через сигнал — передаём путь к файлу.
+                    # Фронт загружает через fetch('file://...') самостоятельно.
+                    "keywords_vos_path":      kw_vos_path,
+                    "doc_topics":             doc_topics_with_dates,
+                    "has_dates":              has_dates,
                 }))
 
             def on_error(data):
                 err = json.loads(data)
                 self.error_occurred.emit(json.dumps({
-                    "action": "bertopic_done",
-                    "error":  err['error']
+                    "action": "bertopic_done", "error": err['error']
                 }))
 
             self._bertopic_worker.progress.connect(on_progress)
@@ -224,8 +214,7 @@ class Bridge(QObject):
             self._bertopic_worker.start()
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             self.error_occurred.emit(json.dumps({
                 "action": "bertopic_done", "error": str(e)
             }))
@@ -237,33 +226,65 @@ class Bridge(QObject):
             sections      = params.get('sections', {})
             bertopic_data = self.session.load_bertopic()
             output_path   = os.path.join(self.session.root, 'report.pdf')
-
             generate_report(bertopic_data, sections, output_path)
+            self.result_ready.emit(json.dumps({
+                "action": "report_done", "path": output_path,
+            }))
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            self.error_occurred.emit(json.dumps({
+                "action": "report_done", "error": str(e)
+            }))
+
+    @pyqtSlot(str)
+    def read_json_file(self, path: str):
+        """
+        Читает JSON-файл из файловой системы и отправляет содержимое на фронт.
+        Используется для больших данных (keywords_vos_data и т.п.),
+        которые не передаются через сигнал напрямую из-за ограничений PyQt6.
+
+        Фронт вызывает: backendObject.read_json_file(path)
+        Получает ответ через onResult: { action: 'file_read_done', key, data }
+        """
+        try:
+            import os
+            if not os.path.exists(path):
+                print(f"[Bridge] файл не существует: {path}")
+                self.error_occurred.emit(json.dumps({
+                    "action": "file_read_done",
+                    "key":    path,
+                    "error":  f"Файл не найден: {path}",
+                }))
+                return
+
+            with open(path, 'r', encoding='utf-8') as f:
+                content = json.load(f)
+
+            print(f"[Bridge] read_json_file called, path={path}")
+            print(f"[Bridge] файл прочитан, keys={list(content.keys())}")
 
             self.result_ready.emit(json.dumps({
-                "action": "report_done",
-                "path":   output_path,
+                "action": "file_read_done",
+                "key":    path,       # фронт сверяет key чтобы понять какой файл пришёл
+                "data":   content,
             }))
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             self.error_occurred.emit(json.dumps({
-                "action": "report_done",
-                "error":  str(e)
+                "action": "file_read_done",
+                "key":    path,
+                "error":  str(e),
             }))
 
     @pyqtSlot(str)
     def save_file_dialog(self, source_path: str):
         dest_path, _ = QFileDialog.getSaveFileName(
-            None,
-            "Сохранить отчёт",
-            "SemanticAnalyzer_report.pdf",
-            "PDF файлы (*.pdf)"
+            None, "Сохранить отчёт",
+            "SemanticAnalyzer_report.pdf", "PDF файлы (*.pdf)"
         )
         if dest_path:
             shutil.copy2(source_path, dest_path)
             self.result_ready.emit(json.dumps({
-                "action": "file_saved",
-                "path":   dest_path,
+                "action": "file_saved", "path": dest_path,
             }))
