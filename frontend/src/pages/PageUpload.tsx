@@ -56,8 +56,12 @@ const PageUpload = ({ files, setFiles, thesaurus, setThesaurus }: PageUploadProp
     setFiles(prev => prev.filter(f => f.name !== name))
 
   const extColor = (name: string) => {
-    const ext = name.split('.').pop()?.toLowerCase()
-    return ({ pdf: 'var(--red)', docx: 'var(--cyan)', txt: 'var(--green)', csv: 'var(--amber)' } as Record<string, string>)[ext ?? ''] || 'var(--text-mid)'
+      const ext = name.split('.').pop()?.toLowerCase()
+      return ({
+        pdf: 'var(--red)', docx: 'var(--cyan)',
+        txt: 'var(--green)', csv: 'var(--amber)',
+        xlsx: 'var(--green)',   // ← добавить
+      } as Record<string, string>)[ext ?? ''] || 'var(--text-mid)'
   }
 
   const thesaurusCount = thesaurus ? Object.keys(thesaurus).length : 0
@@ -227,7 +231,10 @@ const PageUpload = ({ files, setFiles, thesaurus, setThesaurus }: PageUploadProp
                 <Icon name="file" size={15} color={extColor(f.name)} />
                 <span style={{ flex: 1, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--text-hi)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                 <span style={{ fontSize: 11, color: 'var(--text-mid)', whiteSpace: 'nowrap' }}>
-                  {f.size ? (f.size / 1024).toFixed(1) + ' KB' : '—'}
+                  {f.is_dataset
+                    ? `${f.doc_count ?? f.size} строк`
+                    : f.size ? (f.size / 1024).toFixed(1) + ' KB' : '—'
+                  }
                 </span>
                 <button
                   onClick={() => remove(f.name)}
@@ -241,6 +248,29 @@ const PageUpload = ({ files, setFiles, thesaurus, setThesaurus }: PageUploadProp
             ))}
           </div>
         </div>
+      )}
+
+      {files.some((f: any) => f.missing_cols) && (
+          <div style={{
+            padding: '10px 14px', marginBottom: 12,
+            background: 'rgba(239,68,68,.08)',
+            border: '1px solid rgba(239,68,68,.3)',
+            borderRadius: 8,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>
+              ⚠ Не найдены обязательные колонки
+            </div>
+            {files.filter((f: any) => f.missing_cols).map((f: any) => (
+              <div key={f.name} style={{ fontSize: 11, color: 'var(--text-mid)', marginBottom: 4 }}>
+                <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-hi)' }}>{f.name}</span>
+                {' — '}найдено: {f.columns?.join(', ')}
+                <br />
+                <span style={{ color: 'var(--text-lo)' }}>
+                  Нужны колонки: наименование/название и аннотация/описание
+                </span>
+              </div>
+            ))}
+          </div>
       )}
 
       {files.length === 0 && (
