@@ -9,6 +9,7 @@ from modules.report_generator import generate_report
 from modules.bertopic_processor import build_vosviewer_json
 import shutil
 
+
 class Bridge(QObject):
     result_ready   = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
@@ -25,7 +26,7 @@ class Bridge(QObject):
     def open_file_dialog(self):
         paths, _ = QFileDialog.getOpenFileNames(
             None, "Выберите документы", "",
-            "Документы (*.pdf *.docx *.txt *.csv)"
+            "Документы (*.pdf *.docx *.txt *.csv *.xlsx)"  # ← добавлен xlsx
         )
         if not paths:
             self.result_ready.emit(json.dumps({
@@ -67,9 +68,7 @@ class Bridge(QObject):
                 }))
                 return
 
-            print(f"[Bridge] Natasha: {len(documents)} документов, "
-                  f"тезаурус: {len(thesaurus_raw) if thesaurus_raw else 0} записей")
-
+            print(f"[Bridge] Natasha: {len(documents)} документов")
             self._natasha_worker = NatashaWorker(
                 documents, settings, thesaurus_raw=thesaurus_raw
             )
@@ -86,21 +85,38 @@ class Bridge(QObject):
                     "action":            "natasha_done",
                     "total_docs":        result['total_docs'],
                     "total_tokens":      result['total_tokens'],
+                    "fast_mode":         result.get('fast_mode', False),
                     "thesaurus_applied": result.get('thesaurus_applied', False),
                     "thesaurus_entries": result.get('thesaurus_entries', 0),
                     "documents": [
                         {
                             "name":           d['name'],
+                            "title":          d.get('title', d['name']),
+                            "reg_number":     d.get('reg_number', ''),
                             "tokens_count":   d['tokens_count'],
                             "chunks_count":   d['chunks_count'],
-                            "entities_count": len(d.get('entities', [])),
-                            "dates_count":    len(d.get('dates', [])),
+                            "entities_count": d.get('entities_count', len(d.get('entities', []))),
+                            "dates_count":    d.get('dates_count', len(d.get('dates', []))),
+                            "top_entities": {
+                                t: (
+                                    # Если ents — список строк (современный формат)
+                                    ents[:3] if ents and isinstance(ents[0], str)
+                                    # Если ents — список словарей (старый формат)
+                                    else [e['text'] for e in ents[:3]]
+                                )
+                                for t, ents in (
+                                    d.get('entities_by_type') or _group_entities(d.get('entities', []))
+                                ).items()
+                                if t in ('PER', 'ORG', 'LOC')
+                            },
                         }
                         for d in result['documents']
                     ],
                     "natasha_documents": [
                         {
                             "name":         d['name'],
+                            "title":        d.get('title', d['name']),
+                            "reg_number":   d.get('reg_number', ''),
                             "tokens_count": d['tokens_count'],
                             "chunks_count": d['chunks_count'],
                             "entities":     d.get('entities', []),
@@ -144,8 +160,7 @@ class Bridge(QObject):
             def on_finished(data):
                 result = json.loads(data)
 
-                vos_data         = build_vosviewer_json(result)
-                # keywords_vos_data уже в result — из run_bertopic
+                vos_data          = build_vosviewer_json(result)
                 keywords_vos_data = result.get('keywords_vos_data', {})
 
                 result_to_save = {
@@ -158,7 +173,6 @@ class Bridge(QObject):
                 with open(vos_path, 'w', encoding='utf-8') as f:
                     json.dump(vos_data, f, ensure_ascii=False, indent=2)
 
-                # Сохраняем keywords vos отдельным файлом
                 kw_vos_path = os.path.join(self.session.bertopic_dir, 'vosviewer_keywords.json')
                 with open(kw_vos_path, 'w', encoding='utf-8') as f:
                     json.dump(keywords_vos_data, f, ensure_ascii=False, indent=2)
@@ -187,20 +201,17 @@ class Bridge(QObject):
                 has_dates = any(d['date'] for d in doc_topics_with_dates)
 
                 self.result_ready.emit(json.dumps({
-                    "action":                 "bertopic_done",
-                    "topics":                 result['topics'],
-                    "total_docs":             result['total_docs'],
-                    "noise_pct":              result['noise_pct'],
-                    "coherence":              result['coherence'],
-                    "noise_count":            result['noise_count'],
-                    "vos_data":               vos_data,
-                    # keywords_vos_data может быть большим (>100KB при многих темах),
-                    # поэтому НЕ передаём через сигнал — передаём путь к файлу.
-                    # Фронт загружает через fetch('file://...') самостоятельно.
-                    "keywords_vos_path":      kw_vos_path,
-                    "doc_topics":             doc_topics_with_dates,
-                    "has_dates":              has_dates,
-                    "doc_positions": result.get('doc_positions', None),
+                    "action":            "bertopic_done",
+                    "topics":            result['topics'],
+                    "total_docs":        result['total_docs'],
+                    "noise_pct":         result['noise_pct'],
+                    "coherence":         result['coherence'],
+                    "noise_count":       result['noise_count'],
+                    "vos_data":          vos_data,
+                    "keywords_vos_path": kw_vos_path,
+                    "doc_topics":        doc_topics_with_dates,
+                    "has_dates":         has_dates,
+                    "doc_positions":     result.get('doc_positions', None),
                 }))
 
             def on_error(data):
@@ -226,16 +237,15 @@ class Bridge(QObject):
             params        = json.loads(params_json)
             sections      = params.get('sections', {})
             bertopic_data = self.session.load_bertopic()
-            natasha_data = self.session.load_natasha()
+            natasha_data  = self.session.load_natasha()
 
-            # Читаем vos_data из уже сохранённого файла
             vos_path = os.path.join(self.session.bertopic_dir, 'vosviewer.json')
             if os.path.exists(vos_path):
                 with open(vos_path, 'r', encoding='utf-8') as f:
                     bertopic_data['vos_data'] = json.load(f)
 
-            output_path   = os.path.join(self.session.root, 'report.pdf')
-            generate_report(bertopic_data, natasha_data, sections, output_path)  # ← добавить natasha_data
+            output_path = os.path.join(self.session.root, 'report.pdf')
+            generate_report(bertopic_data, natasha_data, sections, output_path)
             self.result_ready.emit(json.dumps({
                 "action": "report_done", "path": output_path,
             }))
@@ -247,21 +257,10 @@ class Bridge(QObject):
 
     @pyqtSlot(str)
     def read_json_file(self, path: str):
-        """
-        Читает JSON-файл из файловой системы и отправляет содержимое на фронт.
-        Используется для больших данных (keywords_vos_data и т.п.),
-        которые не передаются через сигнал напрямую из-за ограничений PyQt6.
-
-        Фронт вызывает: backendObject.read_json_file(path)
-        Получает ответ через onResult: { action: 'file_read_done', key, data }
-        """
         try:
-            import os
             if not os.path.exists(path):
-                print(f"[Bridge] файл не существует: {path}")
                 self.error_occurred.emit(json.dumps({
-                    "action": "file_read_done",
-                    "key":    path,
+                    "action": "file_read_done", "key": path,
                     "error":  f"Файл не найден: {path}",
                 }))
                 return
@@ -269,21 +268,16 @@ class Bridge(QObject):
             with open(path, 'r', encoding='utf-8') as f:
                 content = json.load(f)
 
-            print(f"[Bridge] read_json_file called, path={path}")
-            print(f"[Bridge] файл прочитан, keys={list(content.keys())}")
-
             self.result_ready.emit(json.dumps({
                 "action": "file_read_done",
-                "key":    path,       # фронт сверяет key чтобы понять какой файл пришёл
+                "key":    path,
                 "data":   content,
             }))
 
         except Exception as e:
             import traceback; traceback.print_exc()
             self.error_occurred.emit(json.dumps({
-                "action": "file_read_done",
-                "key":    path,
-                "error":  str(e),
+                "action": "file_read_done", "key": path, "error": str(e)
             }))
 
     @pyqtSlot(str)
@@ -297,3 +291,14 @@ class Bridge(QObject):
             self.result_ready.emit(json.dumps({
                 "action": "file_saved", "path": dest_path,
             }))
+
+
+def _group_entities(entities: list) -> dict:
+    """Вспомогательная функция для группировки сущностей по типу."""
+    out: dict = {}
+    for e in entities:
+        t = e.get('type', 'OTHER')
+        if t not in out:
+            out[t] = []
+        out[t].append(e)
+    return out
