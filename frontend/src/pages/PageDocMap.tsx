@@ -55,11 +55,16 @@ const DocDetailPanel = ({ docName, docTopic, topic, topicIdx, natasha, onClose }
       {/* Шапка */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
+          {natasha?.reg_number && (
+            <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--text-lo)', marginBottom: 3 }}>
+              {natasha.reg_number}
+            </div>
+          )}
           <div style={{ fontSize: 12, fontWeight: 700, wordBreak: 'break-word', marginBottom: 4 }}>
-            {docName.replace(/\.[^.]+$/, '')}
+            {natasha?.title ?? docName.replace(/\.[^.]+$/, '')}
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-lo)', fontFamily: 'var(--mono)' }}>
-            {docName.split('.').pop()?.toUpperCase()} · {natasha?.tokens_count ?? '—'} токенов
+            {natasha?.tokens_count ?? '—'} токенов
           </div>
         </div>
         <button onClick={onClose} style={{
@@ -287,19 +292,31 @@ const PageDocMap = ({ btResult, natashaDocs }: PageDocMapProps) => {
 
           {/* Тултип */}
           {tooltip && (
-            <div style={{
-              position: 'absolute',
-              left: tooltip.x + 12, top: tooltip.y - 10,
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border)',
-              borderRadius: 6, padding: '5px 9px',
-              fontSize: 11, fontFamily: 'var(--mono)',
-              pointerEvents: 'none', zIndex: 10,
-              maxWidth: 220, wordBreak: 'break-word',
-              boxShadow: '0 4px 12px rgba(0,0,0,.3)',
-            }}>
-              {tooltip.name.replace(/\.[^.]+$/, '')}
-            </div>
+              <div style={{
+                position: 'absolute',
+                left: tooltip.x + 12, top: tooltip.y - 10,
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: 6, padding: '6px 10px',
+                fontSize: 11, fontFamily: 'var(--mono)',
+                pointerEvents: 'none', zIndex: 10,
+                maxWidth: 240, wordBreak: 'break-word',
+                boxShadow: '0 4px 12px rgba(0,0,0,.3)',
+              }}>
+                {(() => {
+                  const nd = natashaIndex[tooltip.name]
+                  return (
+                    <>
+                      {nd?.reg_number && (
+                        <div style={{ fontSize: 9, color: 'var(--text-lo)', marginBottom: 2 }}>
+                          {nd.reg_number}
+                        </div>
+                      )}
+                      <div>{nd?.title ?? tooltip.name.replace(/\.[^.]+$/, '')}</div>
+                    </>
+                  )
+                })()}
+              </div>
           )}
         </div>
 
