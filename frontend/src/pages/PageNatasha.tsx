@@ -3,9 +3,8 @@ import Icon from '../components/Icon'
 import { runNatasha, onResult } from '../bridge'
 import type { ProcessedDocument } from './TopicDetailModal'
 
-/* ── LogEntry ── */
 const LogEntry = ({ level, text }: { level: string; text: string }) => {
-  const cls = { info: 'log-info', ok: 'log-ok', warn: 'log-warn', error: 'log-error', dim: 'log-dim' }[level] ?? 'log-dim'
+  const cls    = { info: 'log-info', ok: 'log-ok', warn: 'log-warn', error: 'log-error', dim: 'log-dim' }[level] ?? 'log-dim'
   const prefix = { info: '[INFO]', ok: '[ OK ]', warn: '[WARN]', error: '[ERR ]', dim: '[    ]' }[level] ?? '[    ]'
   return (
     <div className={cls} style={{ marginBottom: 2 }}>
@@ -14,7 +13,6 @@ const LogEntry = ({ level, text }: { level: string; text: string }) => {
   )
 }
 
-/* ── Toggle ── */
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
   <label className="toggle">
     <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
@@ -22,7 +20,6 @@ const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   </label>
 )
 
-/* ── Types ── */
 interface NatSettings {
   segmenter?: boolean
   morph?: boolean
@@ -36,21 +33,23 @@ interface NatSettings {
 }
 
 interface DocStat {
-  name: string
-  tokens_count: number
-  chunks_count: number
+  name:           string
+  title?:         string
+  reg_number?:    string
+  tokens_count:   number
+  chunks_count:   number
   entities_count: number
-  dates_count: number
+  dates_count:    number
+  top_entities?:  Record<string, string[]>
 }
 
 interface PageNatashaProps {
   settings:       NatSettings
   setSettings:    React.Dispatch<React.SetStateAction<NatSettings>>
-  setNatashaDocs: React.Dispatch<React.SetStateAction<ProcessedDocument[]>>  // ← ДОБАВЛЕНО
+  setNatashaDocs: React.Dispatch<React.SetStateAction<ProcessedDocument[]>>
 }
 
-/* ── PageNatasha ── */
-const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps) => {  // ← ДОБАВЛЕНО
+const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps) => {
   const [logs, setLogs] = useState([
     { level: 'info', text: 'Инициализация Natasha NLP pipeline...' },
     { level: 'ok',   text: 'Загружена модель NewsEmbedding (rubert-tiny2)' },
@@ -63,6 +62,7 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
   const [done, setDone]               = useState(false)
   const [docStats, setDocStats]       = useState<DocStat[]>([])
   const [totalTokens, setTotalTokens] = useState(0)
+  const [fastMode, setFastMode]       = useState(false)
   const terminalRef = useRef<HTMLDivElement>(null)
 
   const addLog = (level: string, text: string) => {
@@ -75,22 +75,61 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
 
   useEffect(() => {
     onResult((data) => {
-      if (data.action === 'natasha_progress') {
-        addLog('info', `Обработка ${data.current}/${data.total}: ${data.name}`)
+      // Уведомление о missing_cols при загрузке файлов
+      if (data.action === 'files_selected') {
+        const missing = data.files?.filter((f: any) => f.is_dataset && f.missing_cols) ?? []
+        missing.forEach((f: any) => {
+          addLog('warn', `⚠ Датасет "${f.name}" — не найдены колонки с текстом`)
+          addLog('dim',  `  Доступные колонки: ${f.columns?.join(', ')}`)
+          addLog('dim',  `  Ожидаются: наименование/название и аннотация/описание`)
+        })
         return
       }
+
+      if (data.action === 'natasha_progress') {
+        // Показываем fast_mode только один раз
+        if (data.fast_mode && !fastMode) {
+          setFastMode(true)
+          addLog('warn', `⚡ Fast mode: датасет — NER только на коротких полях`)
+        }
+        // Для датасетов прогресс приходит реже — не спамим лог
+        if (!data.fast_mode || data.current % 100 === 0 || data.current === data.total) {
+          addLog('info', `Обработка ${data.current}/${data.total}: ${data.name}`)
+        }
+        return
+      }
+
       if (data.action !== 'natasha_done') return
 
+      if (data.fast_mode) {
+        addLog('warn', '⚡ Fast mode завершён — морфология пропущена для ускорения')
+      }
+
       data.documents.forEach((d: DocStat) => {
-        addLog('ok', `${d.name} — ${d.tokens_count.toLocaleString()} токенов, ${d.chunks_count} чанков`)
-        if (d.entities_count > 0)
+        // Показываем рег. номер + наименование если есть
+        const label = d.reg_number
+          ? `[${d.reg_number}] ${d.title ?? d.name}`
+          : (d.title ?? d.name)
+
+        addLog('ok', `${label} — ${d.tokens_count.toLocaleString()} токенов, ${d.chunks_count} чанков`)
+
+        // Топ сущностей
+        if (d.top_entities && Object.keys(d.top_entities).length > 0) {
+          const parts: string[] = []
+          if (d.top_entities.PER?.length) parts.push(`PER: ${d.top_entities.PER.join(', ')}`)
+          if (d.top_entities.ORG?.length) parts.push(`ORG: ${d.top_entities.ORG.join(', ')}`)
+          if (d.top_entities.LOC?.length) parts.push(`LOC: ${d.top_entities.LOC.join(', ')}`)
+          if (parts.length > 0) addLog('info', `  ${parts.join(' · ')}`)
+        } else if (d.entities_count > 0) {
           addLog('info', `  Сущностей: ${d.entities_count} · Дат: ${d.dates_count}`)
+        }
       })
 
-      addLog('ok', `Готово · Всего токенов: ${data.total_tokens.toLocaleString()}`)
+      addLog('ok', `Готово · ${data.total_docs} документов · ${data.total_tokens.toLocaleString()} токенов`)
       setDocStats(data.documents)
       setTotalTokens(data.total_tokens)
-      setNatashaDocs(data.natasha_documents ?? [])  // ← полные данные с entities для TopicDetailModal
+      setFastMode(data.fast_mode ?? false)
+      setNatashaDocs(data.natasha_documents ?? [])
       setRunning(false)
       setDone(true)
     })
@@ -100,6 +139,7 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
     setRunning(true)
     setDone(false)
     setDocStats([])
+    setFastMode(false)
     addLog('info', 'Запуск обработки...')
     runNatasha(settings)
   }
@@ -122,8 +162,6 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
-
-        {/* Pipeline toggles */}
         <div className="card">
           <p className="field-label" style={{ marginBottom: 14 }}>Компоненты пайплайна</p>
           {([
@@ -144,7 +182,6 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
           ))}
         </div>
 
-        {/* Params */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card">
             <p className="field-label">Минимальная длина токена</p>
@@ -158,7 +195,6 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
               </span>
             </div>
           </div>
-
           <div className="card">
             <p className="field-label">Язык документов</p>
             <select className="field-input field-select"
@@ -169,7 +205,6 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
               <option value="en">Английский</option>
             </select>
           </div>
-
           <div className="card">
             <p className="field-label">Пользовательский словарь стоп-слов</p>
             <textarea className="field-input" rows={3}
@@ -178,7 +213,6 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
               value={settings.customStop ?? ''}
               onChange={e => update('customStop', e.target.value)} />
           </div>
-
           <div className="card" style={{ padding: '12px 16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <Icon name="info" size={13} color="var(--amber)" />
@@ -193,7 +227,28 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
         </div>
       </div>
 
-      {/* Кнопка запуска */}
+      {/* ── Fast mode баннер — над кнопкой запуска ── */}
+      {fastMode && (
+        <div style={{
+          padding: '10px 14px', marginBottom: 16,
+          background: 'rgba(245,158,11,.08)',
+          border: '1px solid rgba(245,158,11,.3)',
+          borderRadius: 8, display: 'flex', alignItems: 'flex-start', gap: 10,
+        }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>⚡</span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--amber)', marginBottom: 2 }}>
+              Fast mode активен
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-mid)', lineHeight: 1.5 }}>
+              Датасет — морфология пропущена для ускорения.
+              NER извлекается только из коротких полей (наименование, исполнитель, сроки).
+              BERTopic использует исходный текст напрямую через CountVectorizer.
+            </div>
+          </div>
+        </div>
+      )}
+
       <button
         className="btn btn-primary"
         onClick={handleRun}
@@ -205,14 +260,13 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
           : done ? '↺ Запустить повторно' : '▶ Запустить Natasha'}
       </button>
 
-      {/* Статистика после завершения */}
       {done && docStats.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
           {([
-            [String(docStats.length), 'Документов'],
-            [totalTokens.toLocaleString(), 'Токенов'],
-            [String(docStats.reduce((s, d) => s + d.chunks_count, 0)), 'Чанков'],
-            [String(docStats.reduce((s, d) => s + d.entities_count, 0)), 'Сущностей'],
+            [String(docStats.length),                                            'Документов'],
+            [totalTokens.toLocaleString(),                                       'Токенов'],
+            [String(docStats.reduce((s, d) => s + d.chunks_count, 0)),           'Чанков'],
+            [String(docStats.reduce((s, d) => s + d.entities_count, 0)),         'Сущностей'],
           ] as [string, string][]).map(([n, l]) => (
             <div key={l} className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
               <div className="stat-num">{n}</div>
@@ -222,7 +276,6 @@ const PageNatasha = ({ settings, setSettings, setNatashaDocs }: PageNatashaProps
         </div>
       )}
 
-      {/* Терминал */}
       <div className="card">
         <p className="field-label" style={{ marginBottom: 10 }}>Системный журнал</p>
         <div className="terminal" ref={terminalRef}>
