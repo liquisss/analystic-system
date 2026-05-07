@@ -19,33 +19,68 @@ class FileLoaderWorker(QThread):
         try:
             from modules.loader import load_file
             loaded = []
-            total  = len(self.paths)
+            total = len(self.paths)
 
             for i, path in enumerate(self.paths):
+                print(f"[Loader] загружаем: {path}")
                 result = load_file(path)
+                print(f"[Loader] результат: name={result.get('name')}, "
+                      f"is_dataset={result.get('is_dataset')}, "
+                      f"error={result.get('error')}")
 
                 self.progress.emit(json.dumps({
-                    "action":  "file_loading_progress",
+                    "action": "file_loading_progress",
                     "current": i + 1,
-                    "total":   total,
-                    "name":    result['name'],
+                    "total": total,
+                    "name": result['name'],
                 }))
 
-                if not result['error']:
+                if result.get('is_dataset'):
+                    if result.get('missing_cols'):
+                        print(f"[Loader] missing_cols: {result.get('columns')}")
+                        loaded.append({
+                            "name": result['name'],
+                            "ext": result['ext'],
+                            "size": 0,
+                            "error": None,
+                            "is_dataset": True,
+                            "missing_cols": True,
+                            "columns": result.get('columns', []),
+                        })
+                        continue
+
+                    docs = result.get('documents', [])
+                    print(f"[Loader] датасет: {len(docs)} документов, сохраняем...")
+                    self.session.save_raw_dataset(docs)
+                    print(f"[Loader] датасет сохранён")
+
+                    loaded.append({
+                        "name": result['name'],
+                        "ext": result['ext'],
+                        "size": 0,  # у датасета нет размера в байтах
+                        "error": None,
+                        "is_dataset": True,
+                        "doc_count": len(docs),
+                    })
+                    continue
+
+                # Обычный файл
+                if not result.get('error'):
                     safe_name = result['name'].replace('.', '_')
                     self.session.save_raw(safe_name, result)
-                    print(f"[Loader] загружен: {result['name']} ({len(result['text'])} символов)")
+                    print(f"[Loader] файл сохранён: {result['name']}")
 
                 loaded.append({
-                    "name":  result['name'],
-                    "ext":   result['ext'],
-                    "size":  len(result['text']),
-                    "error": result['error']
+                    "name": result['name'],
+                    "ext": result['ext'],
+                    "size": len(result.get('text', '')),
+                    "error": result.get('error'),
+                    "is_dataset": False,
                 })
 
             self.finished.emit(json.dumps({
                 "action": "files_selected",
-                "files":  loaded
+                "files": loaded,
             }))
 
         except Exception as e:
@@ -60,11 +95,6 @@ class NatashaWorker(QThread):
 
     def __init__(self, documents: list, settings: dict,
                  thesaurus_raw: Optional[dict] = None):
-        """
-        documents     — список raw-документов из session.load_raw_all()
-        settings      — настройки Natasha из UI (без ключа 'thesaurus')
-        thesaurus_raw — { "канон": ["вариант1", ...] } или None
-        """
         super().__init__()
         self.documents     = documents
         self.settings      = settings
@@ -72,44 +102,74 @@ class NatashaWorker(QThread):
 
     def run(self):
         try:
-            from modules.natasha_processor import (
-                process_document,
-                build_thesaurus_lookup,
-            )
+            from modules.natasha_processor import process_document, build_thesaurus_lookup
 
             total = len(self.documents)
+            print(f"[NatashaWorker] запуск: {total} документов")
 
-            # Строим lookup тезауруса один раз (дорогая операция — лемматизация синонимов)
+            if total == 0:
+                self.finished.emit(json.dumps({
+                    'documents': [], 'total_tokens': 0,
+                    'total_docs': 0, 'thesaurus_applied': False,
+                    'thesaurus_entries': 0, 'fast_mode': False,
+                }))
+                return
+
+            has_fast = any(d.get('fast_mode') for d in self.documents)
+            print(f"[NatashaWorker] fast_mode={has_fast}")
+
+            self.progress.emit(json.dumps({
+                "action": "natasha_progress",
+                "current": 0,
+                "total": total,
+                "name": "Инициализация...",
+                "fast_mode": has_fast,
+            }))
+
             thesaurus_lookup = None
             if self.thesaurus_raw and isinstance(self.thesaurus_raw, dict) \
                     and len(self.thesaurus_raw) > 0:
-                print(f"[NatashaWorker] строим тезаурус: {len(self.thesaurus_raw)} записей")
                 thesaurus_lookup = build_thesaurus_lookup(self.thesaurus_raw)
 
             results = []
+            report_every = 50 if total > 200 else 1
 
             for i, raw in enumerate(self.documents):
                 if raw.get('error'):
-                    print(f"[NatashaWorker] пропуск {raw.get('name','?')} — ошибка загрузки")
+                    print(f"[NatashaWorker] пропуск {raw.get('name')} — ошибка")
                     continue
 
-                self.progress.emit(json.dumps({
-                    "action":  "natasha_progress",
-                    "current": i + 1,
-                    "total":   total,
-                    "name":    raw['name'],
-                }))
+                if i % report_every == 0 or i == total - 1:
+                    display = (
+                        f"обработано {i + 1}/{total}"
+                        if raw.get('fast_mode')
+                        else raw.get('name', f'doc_{i}')
+                    )
+                    self.progress.emit(json.dumps({
+                        "action": "natasha_progress",
+                        "current": i + 1,
+                        "total": total,
+                        "name": display,
+                        "fast_mode": raw.get('fast_mode', False),
+                    }))
 
-                # process_document возвращает text_raw + text_clean оба поля
-                result = process_document(raw, self.settings, thesaurus_lookup)
-                results.append(result)
+                try:
+                    result = process_document(raw, self.settings, thesaurus_lookup)
+                    results.append(result)
+                except Exception as doc_err:
+                    print(f"[NatashaWorker] ошибка документа {raw.get('name')}: {doc_err}")
+                    traceback.print_exc()
+                    continue
+
+            print(f"[NatashaWorker] готово: {len(results)} документов")
 
             final = {
-                'documents':         results,
-                'total_tokens':      sum(r['tokens_count'] for r in results),
-                'total_docs':        len(results),
+                'documents': results,
+                'total_tokens': sum(r['tokens_count'] for r in results),
+                'total_docs': len(results),
                 'thesaurus_applied': thesaurus_lookup is not None,
                 'thesaurus_entries': len(self.thesaurus_raw) if self.thesaurus_raw else 0,
+                'fast_mode': has_fast,
             }
             self.finished.emit(json.dumps(final, ensure_ascii=False))
 
