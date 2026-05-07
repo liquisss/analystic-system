@@ -3,8 +3,8 @@ import re
 from typing import Optional
 from natasha import (
     Segmenter, MorphVocab, NewsEmbedding,
-    NewsMorphTagger, NewsSyntaxParser, NewsNERTagger,
-    NamesExtractor, DatesExtractor, Doc
+    NewsMorphTagger, NewsNERTagger,
+    DatesExtractor, Doc
 )
 
 STOPWORDS_RU = {
@@ -21,17 +21,14 @@ STOPWORDS_RU = {
     'хоть','после','над','больше','тот','через','эти','нас','про','всего','них',
     'какая','много','разве','три','эту','моя','впрочем','хорошо','свою','этой',
     'перед','иногда','лучше','чуть','том','нельзя','такой','им','более','всегда',
-    'конечно','всю','между', 'рис', 'который', 'Рис',
+    'конечно','всю','между','рис','который','Рис',
 }
 
-# ── Инициализация один раз при импорте ──
 segmenter       = Segmenter()
 morph_vocab     = MorphVocab()
 emb             = NewsEmbedding()
 morph_tagger    = NewsMorphTagger(emb)
-syntax_parser   = NewsSyntaxParser(emb)
 ner_tagger      = NewsNERTagger(emb)
-names_extractor = NamesExtractor(morph_vocab)
 dates_extractor = DatesExtractor(morph_vocab)
 
 CHUNK_SIZE    = 3000
@@ -43,7 +40,6 @@ CHUNK_OVERLAP = 200
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _lemmatize_single_word(word: str) -> str:
-    """Лемматизирует одно слово через Natasha MorphVocab."""
     try:
         doc = Doc(word)
         doc.segment(segmenter)
@@ -57,32 +53,14 @@ def _lemmatize_single_word(word: str) -> str:
 
 
 def build_thesaurus_lookup(raw: dict) -> dict:
-    """
-    Принимает сырой тезаурус из UI:
-        { "евросоюз": ["ес", "eu", "европейский союз"], ... }
-
-    Возвращает:
-        {
-          "single": { лемма_варианта: лемма_канона },
-          "multi":  [ (кортеж_лемм_фразы, лемма_канона), ... ]
-                    отсортировано по убыванию длины (longest match first)
-        }
-
-    Многословный канон ("европейский союз"):
-      - сам регистрируется в multi → при встрече в тексте схлопывается
-        в один токен "европейский_союз"
-      - все варианты тоже регистрируются (однословные → single,
-        многословные → multi)
-    """
     single: dict = {}
-    multi: list  = []
+    multi:  list = []
 
     for canon_raw, variants in (raw or {}).items():
         canon_words = [_lemmatize_single_word(w)
                        for w in canon_raw.strip().lower().split()]
         if not canon_words:
             continue
-
         canon_key = '_'.join(canon_words) if len(canon_words) > 1 else canon_words[0]
 
         for variant_raw in (variants or []):
@@ -90,7 +68,6 @@ def build_thesaurus_lookup(raw: dict) -> dict:
                              for w in variant_raw.strip().lower().split()]
             if not variant_words:
                 continue
-
             if len(variant_words) == 1:
                 v = variant_words[0]
                 if v != canon_key:
@@ -105,28 +82,18 @@ def build_thesaurus_lookup(raw: dict) -> dict:
             multi.append((tuple(canon_words), canon_key))
 
     multi.sort(key=lambda x: -len(x[0]))
-
     print(f"[Thesaurus] lookup: {len(single)} однословных, {len(multi)} фразовых")
     return {'single': single, 'multi': multi}
 
 
 def apply_thesaurus_to_lemmas(lemmas: list, lookup: dict) -> list:
-    """
-    Greedy left-to-right, longest match first.
-
-    Почему ПОСЛЕ всех чанков:
-      Фраза "европейский союз" может разорваться на границе чанков.
-      Собираем все леммы документа — потом один проход тезауруса.
-    """
     if not lookup:
         return lemmas
-
     single = lookup.get('single', {})
     multi  = lookup.get('multi', [])
     n      = len(lemmas)
     result = []
     i      = 0
-
     while i < n:
         matched = False
         for phrase_tuple, canon_key in multi:
@@ -141,7 +108,6 @@ def apply_thesaurus_to_lemmas(lemmas: list, lookup: dict) -> list:
         if not matched:
             result.append(single.get(lemmas[i], lemmas[i]))
             i += 1
-
     return result
 
 
@@ -164,51 +130,64 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def process_chunk(text: str, settings: dict) -> dict:
-    """Обрабатывает один чанк через Natasha. Тезаурус здесь НЕ применяется."""
+def _run_morph_chunk(text: str, settings: dict) -> tuple[list, list]:
+    """Морфология одного чанка → (tokens, lemmas)."""
+    doc = Doc(text)
+    doc.segment(segmenter)
+    doc.tag_morph(morph_tagger)
+    for token in doc.tokens:
+        token.lemmatize(morph_vocab)
+
+    min_len       = settings.get('minTokenLen', 2)
+    use_stopwords = settings.get('stopwords', True)
+    stop_custom   = set(
+        w.strip() for w in settings.get('customStop', '').split('\n') if w.strip()
+    )
+
+    tokens, lemmas = [], []
+    for token in doc.tokens:
+        lemma = (token.lemma or token.text).lower()
+        if len(lemma) < min_len:                        continue
+        if token.pos in ('PUNCT', 'NUM', 'SYM', 'X'):  continue
+        if use_stopwords and lemma in STOPWORDS_RU:     continue
+        if lemma in stop_custom:                        continue
+        tokens.append(token.text)
+        lemmas.append(lemma)
+    return tokens, lemmas
+
+
+def _run_ner_chunk(text: str, do_ner: bool, do_dates: bool) -> tuple[list, list]:
+    """NER + даты одного чанка → (entities, dates)."""
     doc = Doc(text)
     doc.segment(segmenter)
 
-    tokens   = []
-    lemmas   = []
-    entities = []
-    dates    = []
+    entities, dates = [], []
 
-    if settings.get('morph', True):
-        doc.tag_morph(morph_tagger)
-        if settings.get('lemmatize', True):
-            for token in doc.tokens:
-                token.lemmatize(morph_vocab)
-
-        min_len       = settings.get('minTokenLen', 2)
-        use_stopwords = settings.get('stopwords', True)
-        stop_custom   = set(
-            w.strip() for w in settings.get('customStop', '').split('\n') if w.strip()
-        )
-
-        for token in doc.tokens:
-            lemma = (token.lemma or token.text).lower()
-            if len(lemma) < min_len:                        continue
-            if token.pos in ('PUNCT', 'NUM', 'SYM', 'X'):  continue
-            if use_stopwords and lemma in STOPWORDS_RU:     continue
-            if lemma in stop_custom:                        continue
-            tokens.append(token.text)
-            lemmas.append(lemma)
-
-    if settings.get('ner', True):
+    if do_ner:
         doc.tag_ner(ner_tagger)
         for span in doc.spans:
             entities.append({'text': span.text, 'type': span.type})
 
-    if settings.get('dates', True):
+    if do_dates:
         for match in dates_extractor(text):
             dates.append({
-                'text':  match.fact.as_json if hasattr(match.fact, 'as_json') else str(match.fact),
+                'text':  match.fact.as_json
+                         if hasattr(match.fact, 'as_json') else str(match.fact),
                 'start': match.start,
                 'stop':  match.stop,
             })
+    return entities, dates
 
-    return {'tokens': tokens, 'lemmas': lemmas, 'entities': entities, 'dates': dates}
+
+def _dedup_entities(entities: list) -> list:
+    seen = set()
+    out  = []
+    for e in entities:
+        key = (e['text'], e['type'])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,82 +197,108 @@ def process_chunk(text: str, settings: dict) -> dict:
 def process_document(raw: dict, settings: dict,
                      thesaurus_lookup: Optional[dict] = None) -> dict:
     """
-    raw = { name, ext, text, error }
+    Два режима определяются флагом fast_mode в raw:
 
-    Возвращает ДВА текстовых представления:
-      text_raw   — исходный текст после clean_text()
-                   → используется BERTopic для вычисления эмбеддингов
-                   → BERT видит живой язык, пунктуацию, контекст
-                   → даёт точную кластеризацию
+    fast_mode=False (PDF/DOCX/TXT — обычный файл):
+      - Морфология на полном тексте → text_clean (леммы)
+      - NER + даты на полном тексте
+      - Полное качество
 
-      text_clean — леммы после Natasha + тезаурус
-                   → используется BERTopic для c-TF-IDF (ключевые слова тем)
-                   → только значимые термины, синонимы объединены
-                   → даёт читаемые названия тем без мусора
+    fast_mode=True (CSV/XLSX датасет):
+      - Морфология ПРОПУСКАЕТСЯ → text_clean = ''
+      - NER + даты только на ner_text (наименование + исполнитель + сроки)
+      - BERTopic будет использовать text_raw напрямую через CountVectorizer
+      - В 5-10 раз быстрее
     """
-    print(f"[Natasha] обработка: {raw['name']}")
-
-    # text_raw сохраняем ДО лемматизации — исходный очищенный текст
+    is_fast  = raw.get('fast_mode', False)
     text_raw = clean_text(raw['text'])
-    chunks   = split_into_chunks(text_raw)
-    print(f"[Natasha] чанков: {len(chunks)}")
 
-    all_tokens   = []
-    all_lemmas   = []
-    all_entities = []
-    all_dates    = []
+    # Источник для NER: короткий текст для датасета, полный для обычного файла
+    ner_source = clean_text(raw['ner_text']) \
+        if is_fast and raw.get('ner_text') \
+        else text_raw
 
-    for i, chunk in enumerate(chunks):
-        print(f"[Natasha] чанк {i+1}/{len(chunks)}...")
-        result = process_chunk(chunk, settings)
-        all_tokens.extend(result['tokens'])
-        all_lemmas.extend(result['lemmas'])
-        all_entities.extend(result['entities'])
-        all_dates.extend(result['dates'])
+    all_tokens:   list = []
+    all_lemmas:   list = []
+    all_entities: list = []
+    all_dates:    list = []
 
-    # Тезаурус применяется ПОСЛЕ сборки всех чанков
-    # (чтобы многословные фразы не разрывались на границах чанков)
-    if thesaurus_lookup:
-        before     = len(all_lemmas)
-        all_lemmas = apply_thesaurus_to_lemmas(all_lemmas, thesaurus_lookup)
-        after      = len(all_lemmas)
-        print(f"[Thesaurus] '{raw['name']}': {before} → {after} лемм")
+    morph_chunks = split_into_chunks(text_raw)
 
-    seen = set()
-    unique_entities = []
+    if not is_fast:
+        # ── Полный режим: морфология на всём тексте ──────────────────────
+        print(f"[Natasha] обработка: {raw['name']} ({len(morph_chunks)} чанков)")
+        for chunk in morph_chunks:
+            t, l = _run_morph_chunk(chunk, settings)
+            all_tokens.extend(t)
+            all_lemmas.extend(l)
+
+        if thesaurus_lookup:
+            all_lemmas = apply_thesaurus_to_lemmas(all_lemmas, thesaurus_lookup)
+
+        # NER на полном тексте
+        do_ner   = settings.get('ner',   True)
+        do_dates = settings.get('dates', True)
+        if do_ner or do_dates:
+            for chunk in morph_chunks:
+                e, d = _run_ner_chunk(chunk, do_ner, do_dates)
+                all_entities.extend(e)
+                all_dates.extend(d)
+
+    else:
+        # ── Fast mode: только NER на коротком тексте ─────────────────────
+        # Морфология пропускается — text_clean будет пустым
+        # BERTopic сам токенизирует text_raw через CountVectorizer
+        do_ner   = settings.get('ner',   True)
+        do_dates = settings.get('dates', True)
+        if do_ner or do_dates:
+            ner_chunks = split_into_chunks(ner_source)
+            for chunk in ner_chunks:
+                e, d = _run_ner_chunk(chunk, do_ner, do_dates)
+                all_entities.extend(e)
+                all_dates.extend(d)
+
+    all_entities = _dedup_entities(all_entities)
+
+    # Группируем сущности по типу для удобного отображения в UI
+    entities_by_type = {}
     for e in all_entities:
-        key = (e['text'], e['type'])
-        if key not in seen:
-            seen.add(key)
-            unique_entities.append(e)
+        t = e['type']
+        if t not in entities_by_type:
+            entities_by_type[t] = []
+        entities_by_type[t].append(e['text'])
 
     return {
-        'name':         raw['name'],
-        # ── Два представления текста ──────────────────────────────────────
-        'text_raw':     text_raw,               # → эмбеддинги в BERTopic
-        'text_clean':   ' '.join(all_lemmas),   # → c-TF-IDF в BERTopic
-        # ─────────────────────────────────────────────────────────────────
-        'tokens':       all_tokens,
-        'lemmas':       all_lemmas,
-        'entities':     unique_entities,
-        'dates':        all_dates,
-        'chunks_count': len(chunks),
-        'tokens_count': len(all_tokens),
+        'name':             raw['name'],
+        'reg_number':       raw.get('reg_number', ''),
+        'title':            raw.get('title', raw['name']),
+
+        # Два представления текста для BERTopic
+        'text_raw':         text_raw,
+        'text_clean':       ' '.join(all_lemmas),  # пусто при fast_mode
+
+        # Для TopicDetailModal и отчётов
+        'tokens':           all_tokens,
+        'lemmas':           all_lemmas,
+        'entities':         all_entities,
+        'entities_by_type': entities_by_type,   # PER/ORG/LOC сгруппированы
+        'dates':            all_dates,
+
+        # Метрики
+        'chunks_count':     len(morph_chunks),
+        'tokens_count':     len(all_tokens),
+        'entities_count':   len(all_entities),
+        'dates_count':      len(all_dates),
+        'fast_mode':        is_fast,
     }
 
 
 def process_all(documents: list, settings: dict,
                 thesaurus_raw: Optional[dict] = None) -> dict:
-    """
-    thesaurus_raw — { "канон": ["вариант1", ...] } из UI или None.
-    lookup строится один раз для всех документов.
-    """
     thesaurus_lookup = None
     if thesaurus_raw and isinstance(thesaurus_raw, dict) and len(thesaurus_raw) > 0:
         print(f"[Thesaurus] инициализация: {len(thesaurus_raw)} записей...")
         thesaurus_lookup = build_thesaurus_lookup(thesaurus_raw)
-    else:
-        print("[Thesaurus] не задан, пропускаем")
 
     results = []
     for raw in documents:
