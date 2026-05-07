@@ -10,14 +10,16 @@ export interface NerEntity {
 }
 
 export interface ProcessedDocument {
-  name:         string
-  tokens:       string[]
-  lemmas:       string[]
-  entities:     NerEntity[]
-  dates:        any[]
-  text_clean:   string
-  chunks_count: number
-  tokens_count: number
+  name:           string
+  title?:         string    // ← добавить
+  reg_number?:    string    // ← добавить
+  tokens:         string[]
+  lemmas:         string[]
+  entities:       NerEntity[]
+  dates:          any[]
+  text_clean:     string
+  chunks_count:   number
+  tokens_count:   number
 }
 
 interface TopicDetailModalProps {
@@ -119,14 +121,15 @@ const DocRow = ({ doc, natasha, defaultOpen }: {
 
         {/* Имя файла */}
         <span style={{
-          flex:         1,
-          fontSize:     12,
-          fontWeight:   600,
-          overflow:     'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace:   'nowrap',
-        }} title={doc.name}>
-          {fileName}
+          flex: 1, fontSize: 12, fontWeight: 600,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }} title={natasha?.title ?? doc.name}>
+          {natasha?.reg_number && (
+            <span style={{ fontSize: 9, color: 'var(--text-lo)', fontFamily: 'var(--mono)', marginRight: 6 }}>
+              {natasha.reg_number}
+            </span>
+          )}
+          {natasha?.title ?? doc.name.replace(/\.[^.]+$/, '')}
         </span>
 
         {/* Метрики справа */}
