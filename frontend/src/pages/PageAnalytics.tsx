@@ -341,7 +341,7 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
           <Icon name="bar_chart" size={13} /> Аналитика
         </button>
         <button className={`tab${tab === 'vos' ? ' active' : ''}`} onClick={() => setTab('vos')}>
-          <Icon name="network" size={13} /> VOSviewer
+          <Icon name="network" size={13} /> Семантическая карта
         </button>
         <button className={`tab${tab === 'docmap' ? ' active' : ''}`} onClick={() => setTab('docmap')}>
           <Icon name="network" size={13} /> Карта документов
@@ -582,10 +582,12 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px', gap: 20 }}>
                 <div style={{ height: 500, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', position: 'relative' }}>
                   <VOSviewerOnline data={vosData} parameters={vosParameters} />
-                  <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', gap: 6, zIndex: 5, pointerEvents: 'none' }}>
-                    <span className="badge badge-cyan">VOSviewer Online</span>
-                    <span className="badge badge-amber">Cluster Map</span>
-                  </div>
+                  <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 5, background: 'var(--bg-card)', padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <span className="badge badge-cyan">Сетевая карта</span>
+                        <span className="badge badge-amber">Темы</span>
+                      </div>
+                    </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div className="card">
@@ -618,7 +620,7 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
             ) : (
               <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-mid)' }}>
                 <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
-                <p style={{ fontSize: 13 }}>VOSviewer требует минимум 3 темы.<br />Сейчас: <b style={{ color: 'var(--amber)' }}>{vosData?.network?.items?.length ?? 0}</b> — загрузите больше документов.</p>
+                <p style={{ fontSize: 13 }}>Для карты требуется минимум 3 темы.<br />Сейчас: <b style={{ color: 'var(--amber)' }}>{vosData?.network?.items?.length ?? 0}</b> — загрузите больше документов.</p>
               </div>
             )
           )}
@@ -644,9 +646,11 @@ const PageAnalytics = ({ btResult, natashaDocs }: PageAnalyticsProps) => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px', gap: 20 }}>
                 <div style={{ height: 500, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', position: 'relative' }}>
                   <VOSviewerOnline data={keywordsVosData} parameters={vosKeywordsParameters} />
-                  <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', gap: 6, zIndex: 5, pointerEvents: 'none' }}>
-                    <span className="badge badge-cyan">VOSviewer Online</span>
-                    <span className="badge badge-green">Keyword Map</span>
+                  <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 5, background: 'var(--bg-card)', padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <span className="badge badge-cyan">Сетевая карта</span>
+                        <span className="badge badge-green">Ключевые слова</span>
+                      </div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
